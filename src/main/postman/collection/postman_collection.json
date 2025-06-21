@@ -1,0 +1,120 @@
+{
+	"info": {
+		"_postman_id": "d8899942-a1cf-43e6-b5a9-bb369e8f8071",
+		"name": "Quarkus Server-Sent Event (SSE) Proof of Concept (PoC)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "17282"
+	},
+	"item": [
+		{
+			"name": "1. Generate PDF",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// Estrae il processId dal corpo della risposta (che è testo semplice)",
+							"const processId = pm.response.text();",
+							"",
+							"// Imposta il processId come variabile di collezione per usarlo nella prossima richiesta",
+							"pm.collectionVariables.set(\"processId\", processId);",
+							"console.log(`Process ID salvato: ${processId}`);",
+							"",
+							"// Test per verificare che la risposta sia un UUID valido",
+							"pm.test(\"Response should be a valid UUID\", function () {",
+							"    const responseText = pm.response.text();",
+							"    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;",
+							"    pm.expect(responseText).to.match(uuidRegex, \"The process ID is not a valid UUID\");",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/pdf/generate",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"pdf",
+						"generate"
+					]
+				},
+				"description": "Avvia il processo di generazione del PDF e restituisce un ID di processo."
+			},
+			"response": []
+		},
+		{
+			"name": "2. Get PDF Status (SSE)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// I test per le richieste SSE vengono eseguiti dopo la chiusura della connessione.",
+							"pm.test(\"Should receive PDF_READY event\", function () {",
+							"    // Postman riceve gli eventi SSE come un unico blocco di testo nel corpo della risposta.",
+							"    // Il formato per ogni evento è 'data: <message>\\n\\n'.",
+							"    const responseBody = pm.response.text();",
+							"    pm.expect(responseBody).to.include(\"PDF_READY:\", \"Response should contain the PDF_READY event\");",
+							"});",
+							"",
+							"pm.test(\"The event should contain a valid URL\", function () {",
+							"    const responseBody = pm.response.text();",
+							"    const lines = responseBody.split('\\n');",
+							"    const readyLine = lines.find(line => line.includes(\"PDF_READY:\"));",
+							"",
+							"    if (readyLine) {",
+							"        // Estrae la parte di stringa dopo \"PDF_READY:\"",
+							"        const url = readyLine.substring(readyLine.indexOf(\"PDF_READY:\") + \"PDF_READY:\".length).trim();",
+							"        ",
+							"        // Regex per validare che la stringa sia un URL",
+							"        const urlRegex = /^https?:\\/\\/[^\\s$.?#].[^\\s]*$/i;",
+							"        pm.expect(url).to.match(urlRegex, \"The extracted string is not a valid URL\");",
+							"        console.log(`Extracted PDF URL: ${url}`);",
+							"    } else {",
+							"        pm.expect.fail(\"Could not find the PDF URL in the SSE response\");",
+							"    }",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/pdf/status/{{processId}}",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"api",
+						"pdf",
+						"status",
+						"{{processId}}"
+					]
+				},
+				"description": "Si connette all'endpoint SSE per ricevere lo stato della generazione del PDF. Utilizza il `processId` ottenuto dalla richiesta precedente."
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080"
+		},
+		{
+			"key": "processId",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

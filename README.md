@@ -1,5 +1,17 @@
 # Quarkus Server-Sent Event (SSE) Proof of Concept (PoC)
 
+This project is a Proof of Concept (PoC) that demonstrates how to handle long-running asynchronous tasks in a Quarkus application, using Server-Sent Events (SSE) to notify the client in real-time.
+
+The implemented flow is as follows:
+
+1. **Task Start**: The user, through a web interface, requests the generation of a document. This request starts an asynchronous process on the server.
+2. **Immediate Response**: The server does not wait for the task to complete but responds immediately (e.g., with `202 Accepted`), freeing up the client.
+3. **Event Subscription**: The client subscribes to a specific endpoint that exposes a stream of Server-Sent Events (SSE).
+4. **Completion Notification**: Once the asynchronous task is finished and the file is ready, the server sends an event through the SSE connection.
+5. **UI Update**: The client receives the event, which contains the URL to download the file, and dynamically updates the page to show the link to the user.
+
+This approach, based on SSE and reactive programming with Mutiny in Quarkus, offers a simpler alternative to WebSockets for unidirectional server-to-client communication, significantly improving the user experience in scenarios with long-running processes.
+
 This project uses Quarkus, the Supersonic Subatomic Java Framework.
 
 If you want to learn more about Quarkus, please visit its website: <https://quarkus.io/>.

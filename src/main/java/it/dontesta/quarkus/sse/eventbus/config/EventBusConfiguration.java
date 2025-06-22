@@ -6,6 +6,7 @@ package it.dontesta.quarkus.sse.eventbus.config;
 
 import io.quarkus.logging.Log;
 import io.quarkus.runtime.StartupEvent;
+import io.vertx.core.eventbus.MessageCodec;
 import io.vertx.mutiny.core.Vertx;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationCompletedCodec;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationRequestCodec;
@@ -24,13 +25,26 @@ public class EventBusConfiguration {
     }
 
     void onStart(@Observes StartupEvent ev) {
-        Log.debug("Starting with the register custom codec for the EventBus...");
+        Log.debug("Registering custom codecs for the EventBus...");
 
-        vertx.eventBus().getDelegate().registerCodec(new PdfGenerationRequestCodec());
-        vertx.eventBus().getDelegate().registerCodec(new PdfGenerationCompletedCodec());
+        registerCodec(new PdfGenerationRequestCodec());
+        registerCodec(new PdfGenerationCompletedCodec());
 
-        Log.debug("Registered custom codecs for the EventBus successfully:");
-        Log.debugf("- %s", PdfGenerationRequestCodec.CODEC_NAME);
-        Log.debugf("- %s", PdfGenerationCompletedCodec.CODEC_NAME);
+        Log.debug("Custom codecs registration process completed.");
+    }
+
+    /**
+     * Registers a message codec on the Vert.x event bus, handling cases where the codec might already be registered
+     * (e.g., during development hot-reloads).
+     *
+     * @param codec The message codec to register.
+     */
+    private void registerCodec(MessageCodec<?, ?> codec) {
+        try {
+            vertx.eventBus().getDelegate().registerCodec(codec);
+            Log.debugf("Registered custom codec: '%s'", codec.name());
+        } catch (IllegalStateException e) {
+            Log.debugf("Custom codec '%s' is already registered. Skipping.", codec.name());
+        }
     }
 }

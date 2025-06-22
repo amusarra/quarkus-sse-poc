@@ -20,6 +20,7 @@ import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mutiny.core.eventbus.EventBus;
 import io.vertx.mutiny.core.eventbus.Message;
 import io.vertx.mutiny.core.eventbus.MessageConsumer;
+import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationCompletedCodec;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationCompleted;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationRequest;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -120,7 +121,7 @@ public class PdfEventProcessor {
                             eventBus.publish(
                                     completedDestination,
                                     completionEvent,
-                                    new DeliveryOptions().setCodecName("pdf-generation-completed-codec"));
+                                    new DeliveryOptions().setCodecName(PdfGenerationCompletedCodec.CODEC_NAME));
                             Log.debugf("PDF completion notification sent for ID: %s", request.processId());
                         });
     }

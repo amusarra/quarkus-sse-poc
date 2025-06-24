@@ -1,6 +1,6 @@
 {
 	"info": {
-		"_postman_id": "d8899942-a1cf-43e6-b5a9-bb369e8f8071",
+		"_postman_id": "538d78b6-1df8-461d-9a72-94b8ccbeb7d3",
 		"name": "Quarkus Server-Sent Event (SSE) Proof of Concept (PoC)",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "17282"
@@ -57,32 +57,37 @@
 					"script": {
 						"exec": [
 							"// I test per le richieste SSE vengono eseguiti dopo la chiusura della connessione.",
-							"pm.test(\"Should receive PDF_READY event\", function () {",
-							"    // Postman riceve gli eventi SSE come un unico blocco di testo nel corpo della risposta.",
-							"    // Il formato per ogni evento è 'data: <message>\\n\\n'.",
+							"pm.test(\"Should receive PDF_COMPLETED event\", function () {",
 							"    const responseBody = pm.response.text();",
-							"    pm.expect(responseBody).to.include(\"PDF_READY:\", \"Response should contain the PDF_READY event\");",
+							"    // Verifica che il nome dell'evento sia presente",
+							"    pm.expect(responseBody).to.include(\"event:PDF_COMPLETED\", \"Response should contain the PDF_COMPLETED event name\");",
 							"});",
 							"",
-							"pm.test(\"The event should contain a valid URL\", function () {",
+							"pm.test(\"The event data should be a valid JSON with correct details\", function () {",
 							"    const responseBody = pm.response.text();",
-							"    const lines = responseBody.split('\\n');",
-							"    const readyLine = lines.find(line => line.includes(\"PDF_READY:\"));",
+							"    const expectedProcessId = pm.collectionVariables.get(\"processId\");",
 							"",
-							"    if (readyLine) {",
-							"        // Estrae la parte di stringa dopo \"PDF_READY:\"",
-							"        const url = readyLine.substring(readyLine.indexOf(\"PDF_READY:\") + \"PDF_READY:\".length).trim();",
-							"        ",
-							"        // Regex per validare che la stringa sia un URL",
-							"        const urlRegex = /^https?:\\/\\/[^\\s$.?#].[^\\s]*$/i;",
-							"        pm.expect(url).to.match(urlRegex, \"The extracted string is not a valid URL\");",
-							"        console.log(`Extracted PDF URL: ${url}`);",
-							"    } else {",
-							"        pm.expect.fail(\"Could not find the PDF URL in the SSE response\");",
+							"    // Estrae la riga 'data:' che contiene il JSON",
+							"    const dataLine = responseBody.split('\\n').find(line => line.startsWith(\"data:\"));",
+							"    pm.expect(dataLine, \"Could not find data line in SSE response\").to.not.be.undefined;",
+							"",
+							"    // Estrae e fa il parsing del JSON",
+							"    try {",
+							"        const jsonData = dataLine.substring(\"data: \".length);",
+							"        const eventData = JSON.parse(jsonData);",
+							"",
+							"        // Verifica il contenuto del JSON",
+							"        pm.expect(eventData).to.have.property('processId', expectedProcessId);",
+							"        pm.expect(eventData).to.have.property('downloadUrl', `/api/pdf/download/${expectedProcessId}`);",
+							"        console.log(`Received event data: ${JSON.stringify(eventData)}`);",
+							"",
+							"    } catch (e) {",
+							"        pm.expect.fail(\"Failed to parse JSON from SSE data: \" + e.message);",
 							"    }",
 							"});"
 						],
-						"type": "text/javascript"
+						"type": "text/javascript",
+						"packages": {}
 					}
 				}
 			],

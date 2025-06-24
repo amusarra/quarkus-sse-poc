@@ -53,7 +53,7 @@ public class SseBroadcaster {
     }
 
     public Multi<OutboundSseEvent> createStream(String processId) {
-        Log.infof("Creating new SSE stream for processId: %s", processId);
+        Log.debugf("Creating new SSE stream for processId: %s", processId);
         return processors.computeIfAbsent(processId, id -> BroadcastProcessor.create());
     }
 
@@ -63,7 +63,7 @@ public class SseBroadcaster {
         BroadcastProcessor<OutboundSseEvent> processor = processors.get(processId);
 
         if (processor != null) {
-            Log.infof("Sending PDF_COMPLETED event for processId: %s", processId);
+            Log.debugf("Sending PDF_COMPLETED event for processId: %s", processId);
             OutboundSseEvent sseEvent = sse.newEventBuilder()
                     .name("PDF_COMPLETED")
                     .data(event)
@@ -72,6 +72,7 @@ public class SseBroadcaster {
             processor.onNext(sseEvent);
             processor.onComplete();
             processors.remove(processId);
+            Log.debugf("Removed SSE processor for processId: %s", processId);
         } else {
             Log.warnf("No active SSE processor found for processId: %s", processId);
         }
@@ -83,7 +84,7 @@ public class SseBroadcaster {
         BroadcastProcessor<OutboundSseEvent> processor = processors.get(processId);
 
         if (processor != null) {
-            Log.infof("Sending PDF_ERROR event for processId: %s", processId);
+            Log.debugf("Sending PDF_ERROR event for processId: %s", processId);
             OutboundSseEvent sseEvent = sse.newEventBuilder()
                     .name("PDF_ERROR")
                     .data(event)

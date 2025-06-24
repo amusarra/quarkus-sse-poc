@@ -5,6 +5,7 @@
 package it.dontesta.quarkus.sse.eventbus.sse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
@@ -14,7 +15,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Tags;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
@@ -29,11 +29,9 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.sse.OutboundSseEvent;
 
 @QuarkusTest
-@Tags({
-        @Tag("publish-subscribe"),
-        @Tag("eventbus"),
-        @Tag("sse")
-})
+@Tag("publish-subscribe")
+@Tag("eventbus")
+@Tag("sse")
 class SseBroadcasterTest {
 
     @Inject
@@ -72,9 +70,9 @@ class SseBroadcasterTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
         assertEquals(1, receivedEvents.size());
 
-        OutboundSseEvent sseEvent = receivedEvents.get(0);
+        OutboundSseEvent sseEvent = receivedEvents.getFirst();
         assertEquals("PDF_COMPLETED", sseEvent.getName());
-        assertTrue(sseEvent.getData() instanceof PdfGenerationCompleted);
+        assertInstanceOf(PdfGenerationCompleted.class, sseEvent.getData());
         PdfGenerationCompleted receivedData = (PdfGenerationCompleted) sseEvent.getData();
         assertEquals(processId, receivedData.processId());
         assertEquals(downloadUrl, receivedData.pdfUrl());
@@ -102,9 +100,9 @@ class SseBroadcasterTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
         assertEquals(1, receivedEvents.size());
 
-        OutboundSseEvent sseEvent = receivedEvents.get(0);
+        OutboundSseEvent sseEvent = receivedEvents.getFirst();
         assertEquals("PDF_ERROR", sseEvent.getName());
-        assertTrue(sseEvent.getData() instanceof PdfGenerationError);
+        assertInstanceOf(PdfGenerationError.class, sseEvent.getData());
         PdfGenerationError receivedData = (PdfGenerationError) sseEvent.getData();
         assertEquals(processId, receivedData.processId());
         assertEquals(errorMessage, receivedData.errorMessage());

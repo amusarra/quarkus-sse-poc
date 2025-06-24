@@ -10,16 +10,13 @@ import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.Matchers.allOf;
 
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Tags;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
 
 @QuarkusTest
-@Tags({
-        @Tag("integration-test"),
-        @Tag("rest-service")
-})
+@Tag("integration-test")
+@Tag("rest-service")
 class PdfResourceIntegrationTest {
 
     @Test

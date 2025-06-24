@@ -13,7 +13,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Tags;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
@@ -25,10 +24,8 @@ import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationRequest;
 import jakarta.inject.Inject;
 
 @QuarkusTest
-@Tags({
-        @Tag("publish-subscribe"),
-        @Tag("eventbus")
-})
+@Tag("publish-subscribe")
+@Tag("eventbus")
 class PdfGenerationServiceTest {
 
     @Inject

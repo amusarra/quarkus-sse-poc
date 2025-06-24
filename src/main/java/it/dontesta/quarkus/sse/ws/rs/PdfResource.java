@@ -41,8 +41,6 @@ import jakarta.ws.rs.sse.OutboundSseEvent;
 @Path("/api/pdf")
 public class PdfResource {
 
-    private final ConcurrentMap<String, MultiEmitter<? super String>> sseEmitters = new ConcurrentHashMap<>();
-
     @Inject
     EventBus eventBus;
 

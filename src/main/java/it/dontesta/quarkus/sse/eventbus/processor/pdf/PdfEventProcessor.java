@@ -73,10 +73,6 @@ public class PdfEventProcessor {
     @ConfigProperty(name = "pdf.generation.delay.max-seconds", defaultValue = "40")
     long maxDelayInSeconds;
 
-    @Inject
-    @ConfigProperty(name = "pdf.generation.output.path", defaultValue = "target/pdf-generated")
-    String outputPath;
-
     private MessageConsumer<PdfGenerationRequest> consumer;
 
     public PdfEventProcessor(

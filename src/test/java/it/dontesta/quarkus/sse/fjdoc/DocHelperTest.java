@@ -13,7 +13,6 @@ import org.fugerit.java.doc.base.config.DocConfig;
 import org.fugerit.java.doc.base.process.DocProcessContext;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Tags;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -31,10 +30,8 @@ import org.junit.jupiter.api.Test;
  * - change the doc handler and the output mode (here a ByteArrayOutputStream buffer is used)
  */
 
-@Tags({
-        @Tag("fjdoc"),
-        @Tag("integration-test")
-})
+@Tag("fj-doc")
+@Tag("integration-test")
 class DocHelperTest {
 
     @Test

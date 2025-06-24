@@ -7,6 +7,7 @@ package it.dontesta.quarkus.sse.eventbus.processor.pdf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -25,8 +26,8 @@ import jakarta.inject.Inject;
 
 @QuarkusTest
 @Tags({
-    @Tag("publish-subscribe"),
-    @Tag("eventbus")
+        @Tag("publish-subscribe"),
+        @Tag("eventbus")
 })
 class PdfGenerationServiceTest {
 
@@ -47,29 +48,34 @@ class PdfGenerationServiceTest {
 
     @Test
     void testGeneratePdfAsync() throws Exception {
-        String processId = "test-456";
+        String processId = UUID.randomUUID().toString();
         PdfGenerationRequest request = new PdfGenerationRequest(processId);
         CompletableFuture<PdfGenerationCompleted> resultFuture = new CompletableFuture<>();
 
-        // Register the consumer for the completed event
-        eventBus.consumer(
-                completedDestination,
-                message -> resultFuture.complete((PdfGenerationCompleted) message.body()));
+        // Registra un consumatore per l'evento di completamento che filtra per processId
+        var consumer = eventBus.<PdfGenerationCompleted> consumer(completedDestination)
+                .handler(message -> {
+                    if (message.body().processId().equals(processId)) {
+                        resultFuture.complete(message.body());
+                    }
+                });
 
-        // Send the request to the event bus
+        // Invia la richiesta al bus degli eventi
         eventBus.publish(
                 requestsDestination,
                 request,
                 new DeliveryOptions().setCodecName(PdfGenerationRequestCodec.CODEC_NAME));
 
-        // Wait for the result with a timeout
-        // Added a timeout to avoid indefinite blocking in case of issues
-        long timeout = maxDelayInSeconds + 2;
+        // Attende il risultato con un timeout che considera il ritardo massimo di generazione
+        long timeout = maxDelayInSeconds + 5;
         PdfGenerationCompleted event = resultFuture.get(timeout, TimeUnit.SECONDS);
 
-        // Verifica del contenuto dell'evento
+        // Pulisce il consumatore
+        consumer.unregister().await().indefinitely();
+
+        // Verifica il contenuto dell'evento
         assertNotNull(event);
         assertEquals(processId, event.processId());
-        assertEquals("https://storage.example.com/pdfs/" + processId + ".pdf", event.pdfUrl());
+        assertEquals(String.format("/api/pdf/download/%s", processId), event.pdfUrl());
     }
 }

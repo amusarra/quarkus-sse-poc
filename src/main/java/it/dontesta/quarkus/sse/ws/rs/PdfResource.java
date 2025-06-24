@@ -4,13 +4,16 @@
  */
 package it.dontesta.quarkus.sse.ws.rs;
 
+import java.io.InputStream;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.resteasy.reactive.RestStreamElementType;
 
+import io.minio.GetObjectArgs;
+import io.minio.MinioClient;
+import io.minio.errors.ErrorResponseException;
 import io.quarkus.logging.Log;
 import io.quarkus.qute.TemplateInstance;
 import io.smallrye.mutiny.Multi;
@@ -18,14 +21,10 @@ import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.subscription.MultiEmitter;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mutiny.core.eventbus.EventBus;
-import io.vertx.mutiny.core.eventbus.Message;
-import io.vertx.mutiny.core.eventbus.MessageConsumer;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationRequestCodec;
-import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationCompleted;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationRequest;
+import it.dontesta.quarkus.sse.eventbus.sse.SseBroadcaster;
 import it.dontesta.quarkus.sse.qute.Templates;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
@@ -33,7 +32,10 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.sse.OutboundSseEvent;
 
 @ApplicationScoped
 @Path("/api/pdf")
@@ -48,29 +50,18 @@ public class PdfResource {
     Templates templates;
 
     @Inject
-    @ConfigProperty(name = "pdf.eventbus.destination.requests", defaultValue = "pdf-generation-requests")
-    String requestsDestination;
+    SseBroadcaster sseBroadcaster;
 
     @Inject
-    @ConfigProperty(name = "pdf.eventbus.destination.completed", defaultValue = "pdf-generation-completed")
-    String completedDestination;
+    MinioClient minioClient;
 
-    private MessageConsumer<PdfGenerationCompleted> consumer;
+    @Inject
+    @ConfigProperty(name = "pdf.minio.bucket-name")
+    String bucketName;
 
-    @PostConstruct
-    void init() {
-        // Subscribe to the event bus for PDF generation completion events
-        consumer = eventBus
-                .<PdfGenerationCompleted> consumer(completedDestination)
-                .handler(this::handlePdfCompletedEvent);
-    }
-
-    @PreDestroy
-    void cleanup() {
-        if (consumer != null) {
-            consumer.unregister().await().indefinitely();
-        }
-    }
+    @Inject
+    @ConfigProperty(name = "pdf.eventbus.destination.requests", defaultValue = "pdf-generation-requests")
+    String requestsDestination;
 
     @POST
     @Path("/generate")
@@ -93,22 +84,38 @@ public class PdfResource {
     @GET
     @Path("/status/{processId}")
     @Produces(MediaType.SERVER_SENT_EVENTS)
-    @RestStreamElementType(MediaType.TEXT_PLAIN)
-    public Multi<String> getPdfStatus(@PathParam("processId") String processId) {
+    public Multi<OutboundSseEvent> getPdfStatus(@PathParam("processId") String processId) {
         Log.debugf("The client requested status for ID: %s", processId);
+        return sseBroadcaster.createStream(processId);
+    }
 
-        return Multi.createFrom()
-                .emitter(
-                        emitter -> {
-                            sseEmitters.put(processId, emitter);
-                            Log.debugf("SSE emitter stored for ID: %s", processId);
+    @GET
+    @Path("/download/{processId}")
+    @Produces(MediaType.APPLICATION_OCTET_STREAM)
+    public Response downloadPdf(@PathParam("processId") String processId) {
+        String objectKey = processId + ".pdf";
+        try {
+            InputStream stream = minioClient.getObject(
+                    GetObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(objectKey)
+                            .build());
 
-                            emitter.onTermination(
-                                    () -> {
-                                        sseEmitters.remove(processId);
-                                        Log.debugf("SSE emitter removed for ID: %s", processId);
-                                    });
-                        });
+            Response.ResponseBuilder response = Response.ok(stream);
+            response.header(HttpHeaders.CONTENT_DISPOSITION, "attachment;filename=" + objectKey);
+            response.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM);
+            return response.build();
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                Log.warnf("PDF with key: %s not found in MinIO bucket: %s", objectKey, bucketName);
+                return Response.status(Response.Status.NOT_FOUND).build();
+            }
+            Log.errorf(e, "Failed to download PDF with key: %s from MinIO bucket: %s", objectKey, bucketName);
+            return Response.serverError().entity(e.getMessage()).build();
+        } catch (Exception e) {
+            Log.errorf(e, "An unexpected error occurred while downloading PDF with key: %s", objectKey);
+            return Response.serverError().entity(e.getMessage()).build();
+        }
     }
 
     @GET
@@ -116,21 +123,5 @@ public class PdfResource {
     @Produces(MediaType.TEXT_HTML)
     public TemplateInstance getPdfGeneratorPage() {
         return templates.pdf();
-    }
-
-    // Handler for PDF generation completion events
-    private void handlePdfCompletedEvent(Message<PdfGenerationCompleted> message) {
-        PdfGenerationCompleted completion = message.body();
-        Log.debugf(
-                "Received PDF completion event for ID: %s, URL: %s",
-                completion.processId(), completion.pdfUrl());
-
-        MultiEmitter<? super String> emitter = sseEmitters.get(completion.processId());
-        if (emitter != null) {
-            emitter.emit("PDF_READY:" + completion.pdfUrl());
-            emitter.complete();
-        } else {
-            Log.warnf("No active SSE emitter found for ID: %s", completion.processId());
-        }
     }
 }

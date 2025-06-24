@@ -37,7 +37,11 @@ In questo articolo, analizzeremo un'applicazione Proof of Concept (PoC) che dimo
 Esploreremo l'architettura, il codice sorgente e gli strumenti per testare la soluzione.
 A differenza di una semplice simulazione, questa PoC genera realmente un file PDF utilizzando la libreria **fj-doc** e lo archivia su uno storage a oggetti **MinIO**.
 
+
+
 > **Bonus**: alla fine dell'articolo, troverai il link al progetto completo su GitHub, che include un'applicazione Quarkus funzionante con SSE e un client HTML per testare la funzionalità. Inoltre, sono inclusi test automatici con JUnit per garantire la qualità del codice e la corretta integrazione tra i componenti + una collection di Postman per testare il flusso end-to-end.
+
+
 
 ## Cosa sono i Server-Sent Events (SSE)?
 
@@ -48,9 +52,11 @@ I Server-Sent Events sono uno standard web che permette a un server di inviare a
 - **Standard Web**: è supportato nativamente dalla maggior parte dei browser moderni tramite l'oggetto EventSource.
 - **Reconnect Automatica**: i client SSE gestiscono automaticamente la reconnect in caso di perdita del collegamento.
 
+
+
 In questa PoC, SSE viene utilizzato per informare l'utente sullo stato di una richiesta di generazione di un PDF.
-Il client avvia la richiesta, riceve un ID e si mette in ascolto su un canale SSE in attesa di ricevere la notifica di avvenuta generazione del PDF.
-Questo approccio consente di mantenere l'interfaccia utente reattiva e di evitare il blocco del thread principale durante operazioni potenzialmente lunghe.
+
+Il client avvia la richiesta, riceve un ID e si mette in ascolto su un canale SSE in attesa di ricevere la notifica di avvenuta generazione del PDF. Questo approccio consente di mantenere l'interfaccia utente reattiva e di evitare il blocco del thread principale durante operazioni potenzialmente lunghe.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -87,7 +93,7 @@ sequenceDiagram
    end
 ```
 
-Figura 1: Flusso dell'applicazione con Server-Sent Events
+**Figura 1**: Flusso dell'applicazione con Server-Sent Events
 
 Quali sono i componenti principali di questa architettura?
 
@@ -96,6 +102,8 @@ Quali sono i componenti principali di questa architettura?
 - **Processo di generazione**: esegue la logica per generare il PDF in background utilizzando la libreria `fj-doc` e salvando il risultato su uno storage a oggetti MinIO.
 - **SSE**: gestisce la comunicazione degli aggiornamenti di stato dal server al client.
 - **Interfaccia utente**: mostra lo stato della generazione del PDF all'utente.
+
+<div style="page-break-after: always; break-after: page;"></div>
 
 Questa architettura consente di separare le responsabilità, mantenendo il codice pulito e facilmente manutenibile. Il server gestisce la logica di business, mentre il client si occupa della presentazione e dell'interazione con l'utente.
 
@@ -141,12 +149,14 @@ public Uni<String> generatePdf() {
 }
 ```
 
-Source Code 1: Implementazione dell'endpoint REST per la richiesta di generazione del PDF
+**Source Code 1**: Implementazione dell'endpoint REST per la richiesta di generazione del PDF
 
 Questo è un tipo di operazione non bloccante che restituisce un `Uni<String>`, per essere eseguita sul thread di I/O (event loop), garantendo così prestazioni elevate e scalabilità. Il metodo genera un ID univoco per la richiesta e pubblica un evento sull'Event Bus di Quarkus per avviare il processo di generazione del PDF.
 
 L'endpoint `/download/{processId}` permette di scaricare il PDF generato dal servizio di storage S3 MinIO.
 Quest'operazione è anch'essa non bloccante e restituisce un `Uni<Response>`, che rappresenta la risposta HTTP con il file PDF come contenuto. La logica bloccante per il download del PDF da MinIO viene eseguita all'interno di un blocco `Uni.createFrom().item(() -> {...})`, per garantire che non blocchi il thread di I/O.
+
+<div style="page-break-after: always; break-after: page;"></div>
 
 ```java
 @GET
@@ -181,7 +191,9 @@ public Uni<Response> downloadPdf(@PathParam("processId") String processId) {
 }
 ```
 
-Source Code 2: Implementazione dell'endpoint REST per il download del PDF
+**Source Code 2**: Implementazione dell'endpoint REST per il download del PDF
+
+
 
 > **Approfondimento**: per saperne di più su Quarkus e il suo Event Bus, consulta la [documentazione ufficiale](https://quarkus.io/guides/reactive-event-bus).
 > Per ulteriori approfondimenti sull'Event Bus, consiglio di leggere l'eBook [Quarkus Event Bus - Come sfruttarlo al massimo: utilizzi e vantaggi](https://bit.ly/3VTG2dt).
@@ -190,8 +202,7 @@ Source Code 2: Implementazione dell'endpoint REST per il download del PDF
 
 ### Endpoint SSE
 
-L'endpoint SSE `/status/{id}` e di conseguenza il metodo `getPdfStatus`, è il cuore del meccanismo di notifica tramite Server-Sent Events (SSE).
-A seguire l'implementazione di questo endpoint.
+L'endpoint SSE `/status/{id}` e di conseguenza il metodo `getPdfStatus`, è il cuore del meccanismo di notifica tramite Server-Sent Events (SSE). A seguire l'implementazione di questo endpoint.
 
 ```java
 @GET
@@ -203,14 +214,13 @@ public Multi<OutboundSseEvent> getPdfStatus(@PathParam("processId") String proce
 }
 ```
 
-Source Code 3: Implementazione dell'endpoint SSE per gli aggiornamenti di stato del PDF
+**Source Code 3**: Implementazione dell'endpoint SSE per gli aggiornamenti di stato del PDF
 
 Lo scopo di questo metodo è di stabilire una connessione persistente tra il client (ad esempio, un browser) e il server. Attraverso questa connessione, il server può inviare aggiornamenti di stato (eventi) al client in modo proattivo, senza che il client debba continuamente interrogare il server (polling).
 
 L'annotazione `@Produces(MediaType.SERVER_SENT_EVENTS)` indica che questo endpoint produrrà eventi SSE, che saranno inviati al client in formato `text/event-stream`, che è lo standard per le comunicazioni SSE. Dice a Quarkus e al client di trattare questa connessione come un flusso di eventi.
 
-Il tipo di ritorno `Multi<OutboundSseEvent>` rappresenta un flusso di eventi (di zero o più elementi) che possono essere inviati al client.
-`Multi` è una parte del framework Mutiny di Quarkus, che consente di gestire flussi reattivi in modo semplice e intuitivo. In questo contesto, ogni `OutboundSseEvent` emesso dal `Multi` verrà inviato come un singolo evento SSE al client.
+Il tipo di ritorno `Multi<OutboundSseEvent>` rappresenta un flusso di eventi (di zero o più elementi) che possono essere inviati al client.`Multi` è una parte del framework Mutiny di Quarkus, che consente di gestire flussi reattivi in modo semplice e intuitivo. In questo contesto, ogni `OutboundSseEvent` emesso dal `Multi` verrà inviato come un singolo evento SSE al client.
 
 Il metodo `sseBroadcaster.createStream(processId)` crea un flusso di eventi SSE associato all'ID del processo specificato utilizzando il componente `SseBroadcaster` responsabile di:
 
@@ -224,10 +234,10 @@ In sintesi, quando un client chiama `GET /api/pdf/status/{processId}`, questo me
 
 #### Nota sulla Gestione delle Connessioni SSE con SseBroadcaster
 
-Nell'implementazione corrente, la gestione delle connessioni Server-Sent Events (SSE) è stata centralizzata nel componente `SseBroadcaster`.
-Questo servizio astrae la logica di creazione, memorizzazione e notifica dei flussi di eventi, semplificando il codice dell'endpoint `PdfResource`.
+Nell'implementazione corrente, la gestione delle connessioni Server-Sent Events (SSE) è stata centralizzata nel componente `SseBroadcaster`. Questo servizio astrae la logica di creazione, memorizzazione e notifica dei flussi di eventi, semplificando il codice dell'endpoint `PdfResource`.
 
 L'implementazione sottostante del `SseBroadcaster` si basa su un meccanismo **in-memory** (come una `ConcurrentMap`) locale alla singola istanza della JVM.
+
 Questo approccio, sebbene efficace per una singola istanza, presenta limiti significativi in un ambiente di produzione distribuito (es. cluster Kubernetes, più istanze dietro un load balancer):
 
 - **Stato Locale**: la mappa degli emitter risiede nella memoria di una singola istanza. Se l'applicazione viene scalata orizzontalmente, ogni istanza avrà il proprio `SseBroadcaster` con una mappa isolata e non condivisa.
@@ -291,7 +301,7 @@ public class SseBroadcaster {
 }
 ```
 
-Source Code 4: Gestione centralizzata degli eventi nel SseBroadcaster
+**Source Code 4**: Gestione centralizzata degli eventi nel SseBroadcaster
 
 Ogni qualvolta viene ricevuto un evento di completamento della generazione del PDF, il metodo `handlePdfCompletedEvent` viene chiamato per inviare l'aggiornamento di stato al client tramite l'emitter associato all'ID del processo. Lo stesso vale per gli eventi di errore, gestiti dal metodo `handlePdfErrorEvent`.
 
@@ -373,7 +383,9 @@ public class PdfEventProcessor {
     }
 }
 ```
-Source Code 5: Logica del `PdfEventProcessor` per la generazione e l'upload del PDF
+**Source Code 5**: Logica del `PdfEventProcessor` per la generazione e l'upload del PDF
+
+<div style="page-break-after: always; break-after: page;"></div>
 
 Il flusso operativo è il seguente:
 
@@ -398,7 +410,7 @@ A seguire lo screenshot della DevUI di Quarkus che mostra i test JUnit eseguiti 
 
 ![Quarkus DevUI - Test JUnit](resources/images/quarkus-devui-junit-tests.png)
 
-Figura 2: Quarkus DevUI - Test JUnit eseguiti con successo
+**Figura 2**: Quarkus DevUI - Test JUnit eseguiti con successo
 
 Il progetto include anche una semplice pagina HTML per testare l'applicazione in modo manuale. Questa pagina consente di inviare una richiesta di generazione del PDF e di visualizzare gli aggiornamenti di stato in tempo reale.
 
@@ -438,13 +450,13 @@ Il file `src/main/resources/templates/pub/pdf-generator.html` contiene il codice
 });
 ```
 
-Source Code 6: Gestione degli eventi SSE nominati nel client HTML
+**Source Code 6**: Gestione degli eventi SSE nominati nel client HTML
 
 A seguire uno screenshot della pagina HTML in esecuzione, che mostra il flusso di generazione del PDF e la ricezione degli aggiornamenti di stato tramite SSE.
 
 ![Client HTML - Generazione PDF con SSE](resources/images/client-html-sse.png)
 
-Figura 3: Client HTML - Generazione PDF con SSE
+**Figura 3**: Client HTML - Generazione PDF con SSE
 
 Dai log della console dell'applicazione, possiamo vedere il flusso di esecuzione mostrato nel diagramma di sequenza. A seguire un esempio di log generato a fronte della richiesta di generazione del PDF eseguita dal client HTML.
 
@@ -462,7 +474,7 @@ Dai log della console dell'applicazione, possiamo vedere il flusso di esecuzione
 2025-06-23 11:30:35,520 DEBUG  [i.d.q.s.e.b.SseBroadcaster] (vert.x-eventloop-thread-3) Sent PDF_COMPLETED event for process ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
 ```
 
-Console 1: Log generato durante la generazione del PDF
+**Console 1**: Log generato durante la generazione del PDF
 
 Dal log è possibile notare l'uso dell'event loop di Vert.x (`vert.x-eventloop-thread-*`) per le operazioni non bloccanti (gestione richieste HTTP, eventi) e di un thread del pool dedicato (`executor-thread-1`) per l'esecuzione della generazione del PDF, che è un'operazione bloccante.
 
@@ -483,7 +495,7 @@ La collection contiene due richieste da eseguire in sequenza:
    - **Azione**: Esegue una richiesta `GET` all'endpoint `/api/pdf/status/{{processId}}`.
    - **Scopo**: Utilizza l'ID salvato in precedenza per aprire una connessione Server-Sent Events e mettersi in ascolto degli aggiornamenti di stato.
    - **Risultato Atteso**: Postman manterrà la connessione aperta. Dopo il ritardo gestito dal `PdfEventProcessor`, il server invierà un evento nominato `PDF_COMPLETED`. Postman visualizzerà la notifica ricevuta, che sarà simile a:
-      
+     
       ```
       event: PDF_COMPLETED
       data: {"processId":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx","pdfUrl":"/api/pdf/download/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}
@@ -495,7 +507,7 @@ A seguire uno screenshot di Postman che mostra l'esecuzione della richiesta SSE 
 
 ![Postman - Test SSE](resources/images/postman-collection-sse.png)
 
-Figura 4: Esecuzione del test SSE con Postman
+**Figura 4**: Esecuzione del test SSE con Postman
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -517,6 +529,7 @@ Tuttavia, come discusso, l'attuale `SseBroadcaster` basato su una mappa in-memor
 
 In sintesi, la combinazione delle funzionalità reattive di Quarkus con i pattern di concorrenza di Java offre un toolkit potente per costruire applicazioni moderne, resilienti e performanti, in grado di offrire un'eccellente esperienza utente.
 
+<div style="page-break-after: always; break-after: page;"></div>
 
 ## Bonus: codice sorgente completo su GitHub
 
@@ -525,6 +538,7 @@ Il codice sorgente completo della PoC è disponibile su GitHub, dove puoi esplor
 Il README.md del repository contiene istruzioni dettagliate su come eseguire l'applicazione, configurare MinIO e testare gli endpoint.
 
 > Non dimenticare di mettere una stella ⭐ al progetto se lo trovi utile!
+
 
 
 ## Bonus: Un framework per la generazione di documenti
@@ -539,10 +553,14 @@ A differenza di una semplice simulazione, questa PoC non si limita a un ritardo 
 - XLS/XLSX
 - CSV
 
-Uno dei suoi punti di forza è la flessibilità: permette di definire la struttura del documento tramite file di configurazione XML, separando la logica di business dalla presentazione. Supporta inoltre l'uso di template engine come Freemarker per rendere dinamica la creazione dei contenuti. Qui <https://venusdocs.fugerit.org/guide/> trovi una guida completa su come utilizzare fj-doc e creare documenti in modo semplice e intuitivo. Qui <https://docs.fugerit.org/fj-doc-playground/home/> trovi un playground online per testare le funzionalità di fj-doc senza dover configurare nulla localmente.
+Uno dei suoi punti di forza è la flessibilità: permette di definire la struttura del documento tramite file di configurazione XML, separando la logica di business dalla presentazione. Supporta inoltre l'uso di template engine come Freemarker per rendere dinamica la creazione dei contenuti. 
+
+* Qui <https://venusdocs.fugerit.org/guide/> trovi una guida completa su come utilizzare fj-doc e creare documenti in modo semplice e intuitivo. 
+* Qui <https://docs.fugerit.org/fj-doc-playground/home/> trovi un playground online per testare le funzionalità di fj-doc senza dover configurare nulla localmente.
 
 All'interno di questa PoC, `fj-doc` è integrato nel `PdfEventProcessor`. Il metodo `generatePdfAsync` utilizza una classe helper (`DocHelper`) per invocare il processo di generazione di `fj-doc`, che crea il PDF in un `ByteArrayOutputStream`. Il byte array risultante viene poi utilizzato per l'upload su MinIO, completando un flusso di lavoro realistico e funzionale.
 
+<div style="page-break-after: always; break-after: page;"></div>
 
 ## Risorse Utili
 

@@ -48,7 +48,10 @@
     </style>
 </head>
 <body>
-<h1>Testing SSE Rest endpoint</h1>
+<h1>Asynchronous PDF Generation with SSE</h1>
+<p>This page allows you to test the asynchronous PDF generation feature using Server-Sent Events (SSE).</p>
+<p>Click the button below to initiate a PDF generation request. The status of the request will be displayed in the
+    textarea below, and once the PDF is ready, a link to download it will appear.</p>
 
 <button id="generatePdf">Generate PDF</button>
 
@@ -72,64 +75,65 @@
             statusLog.scrollTop = statusLog.scrollHeight;
         }
 
+        function cleanup() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            generateButton.disabled = false;
+        }
+
         generateButton.addEventListener('click', function() {
-            // Disable the button during the request
             generateButton.disabled = true;
             statusLog.value = '';
-            statusDiv.textContent = '';
+            statusDiv.innerHTML = ''; // Clear previous status/link
 
             appendToLog('Sending PDF generation request...');
 
             fetch('/api/pdf/generate', {
                 method: 'POST'
             })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Request failed: ' + response.status);
-                    }
-                    return response.text();
-                })
-                .then(processId => {
-                    appendToLog(`Request sent successfully. Process ID: ${processId}`);
-                    appendToLog('Waiting for PDF generation...');
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Request failed: ' + response.status);
+                }
+                return response.text();
+            })
+            .then(processId => {
+                appendToLog(`Request sent successfully. Process ID: ${processId}`);
+                appendToLog('Waiting for PDF generation...');
 
-                    // Close any previous SSE connection
-                    if (eventSource) {
-                        eventSource.close();
-                    }
+                if (eventSource) {
+                    eventSource.close();
+                }
 
-                    // Create a new SSE connection
-                    eventSource = new EventSource(`/api/pdf/status/${processId}`);
+                eventSource = new EventSource(`/api/pdf/status/${processId}`);
 
-                    eventSource.onmessage = function(event) {
-                        const data = event.data;
-                        appendToLog(`Received event: ${data}`);
-
-                        if (data.startsWith('PDF_READY:')) {
-                            const pdfUrl = data.substring('PDF_READY:'.length);
-                            appendToLog(`PDF generated successfully!`);
-                            statusDiv.innerHTML = `<strong>PDF ready:</strong> <a href="${pdfUrl}" target="_blank">${pdfUrl}</a>`;
-
-                            // Close the SSE connection
-                            eventSource.close();
-                            eventSource = null;
-
-                            // Re-enable the button
-                            generateButton.disabled = false;
-                        }
-                    };
-
-                    eventSource.onerror = function() {
-                        appendToLog('Error in SSE connection');
-                        eventSource.close();
-                        eventSource = null;
-                        generateButton.disabled = false;
-                    };
-                })
-                .catch(error => {
-                    appendToLog(`Error: ${error.message}`);
-                    generateButton.disabled = false;
+                eventSource.addEventListener('PDF_COMPLETED', function(event) {
+                    const data = JSON.parse(event.data);
+                    appendToLog(`PDF generated successfully! Download available at: ${data.pdfUrl}`);
+                    statusDiv.innerHTML = `<strong>PDF ready:</strong> <a href="${data.pdfUrl}" target="_blank">Download PDF</a>`;
+                    cleanup();
                 });
+
+                eventSource.addEventListener('PDF_ERROR', function(event) {
+                    const data = JSON.parse(event.data);
+                    const errorMessage = `Error generating PDF: ${data.errorMessage}`;
+                    appendToLog(errorMessage);
+                    cleanup();
+                });
+
+                eventSource.onerror = function() {
+                    const errorMessage = 'Error in SSE connection. The server might be down or the connection was lost.';
+                    appendToLog(errorMessage);
+                    cleanup();
+                };
+            })
+            .catch(error => {
+                const errorMessage = `Error: ${error.message}`;
+                appendToLog(errorMessage);
+                cleanup();
+            });
         });
     });
 </script>

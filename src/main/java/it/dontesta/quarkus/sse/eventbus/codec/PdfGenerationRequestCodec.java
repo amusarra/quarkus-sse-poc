@@ -16,20 +16,13 @@ public class PdfGenerationRequestCodec
 
     @Override
     public void encodeToWire(Buffer buffer, PdfGenerationRequest request) {
-        String processId = request.processId();
-        buffer.appendInt(processId.length());
-        buffer.appendString(processId);
+        // Not needed for a local codec, as it does not serialize data
     }
 
     @Override
     public PdfGenerationRequest decodeFromWire(int position, Buffer buffer) {
-        int positionLocal = position;
-        int processIdLength = buffer.getInt(positionLocal);
-        positionLocal += 4;
-
-        String processId = buffer.getString(positionLocal, positionLocal + processIdLength);
-
-        return new PdfGenerationRequest(processId);
+        // Not needed for a local codec, as it does not serialize data
+        return null;
     }
 
     @Override

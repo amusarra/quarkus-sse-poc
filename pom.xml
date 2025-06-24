@@ -8,11 +8,11 @@
     <description>A PoC demonstrating the use of Server-Sent Event (SSE) through the implementation of a possible
         real-world use case.
     </description>
+    <inceptionYear>2025</inceptionYear>
     <organization>
         <name>Antonio Musarra's Blog</name>
         <url>https://www.dontesta.it</url>
     </organization>
-    <inceptionYear>2025</inceptionYear>
     <licenses>
         <license>
             <name>MIT</name>
@@ -26,26 +26,25 @@
             <name>Antonio Musarra</name>
             <email>antonio.musarra@gmail.com</email>
             <url>https://www.dontesta.it</url>
-            <timezone>+1</timezone>
             <roles>
                 <role>IT Senior Consultant</role>
                 <role>Senior Software Architect</role>
             </roles>
+            <timezone>+1</timezone>
         </developer>
     </developers>
-
     <properties>
-        <compiler-plugin.version>3.14.0</compiler-plugin.version>
         <maven.compiler.release>21</maven.compiler.release>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+        <surefire-plugin.version>3.5.3</surefire-plugin.version>
         <quarkus.platform.version>3.23.3</quarkus.platform.version>
         <skipITs>true</skipITs>
-        <surefire-plugin.version>3.5.3</surefire-plugin.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+        <compiler-plugin.version>3.14.0</compiler-plugin.version>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <fj-doc-version>8.13.11</fj-doc-version>
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
     </properties>
-
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -62,9 +61,15 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>org.fugerit.java</groupId>
+                <artifactId>fj-doc</artifactId>
+                <version>${fj-doc-version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -91,6 +96,11 @@
             <artifactId>quarkus-qute-web</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.quarkiverse.minio</groupId>
+            <artifactId>quarkus-minio</artifactId>
+            <version>3.8.4</version>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
             <scope>test</scope>
@@ -110,8 +120,24 @@
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.fugerit.java</groupId>
+            <artifactId>fj-doc-base</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.fugerit.java</groupId>
+            <artifactId>fj-doc-freemarker</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.fugerit.java</groupId>
+            <artifactId>fj-doc-mod-fop</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-
     <build>
         <plugins>
             <plugin>
@@ -171,12 +197,6 @@
                 <groupId>com.mycila</groupId>
                 <artifactId>license-maven-plugin</artifactId>
                 <version>4.5</version>
-                <configuration>
-                    <header>src/main/resources/license-header.spdx</header>
-                    <includes>
-                        <include>**/*.java</include>
-                    </includes>
-                </configuration>
                 <executions>
                     <execution>
                         <goals>
@@ -184,10 +204,36 @@
                         </goals>
                     </execution>
                 </executions>
+                <configuration>
+                    <header>src/main/resources/license-header.spdx</header>
+                    <includes>
+                        <include>**/*.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.fugerit.java</groupId>
+                <artifactId>fj-doc-maven-plugin</artifactId>
+                <version>${fj-doc-version}</version>
+                <executions>
+                    <execution>
+                        <id>freemarker-verify</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>verify</goal>
+                        </goals>
+                        <configuration>
+                            <templateBasePath>${project.basedir}/src/main/resources/fj-doc/template</templateBasePath>
+                            <generateReport>true</generateReport>
+                            <failOnErrors>true</failOnErrors>
+                            <reportOutputFolder>${project.build.directory}/freemarker-syntax-verify-report
+                            </reportOutputFolder>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
-
     <profiles>
         <profile>
             <id>native</id>

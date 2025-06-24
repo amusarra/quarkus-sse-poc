@@ -9,6 +9,7 @@ import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.eventbus.MessageCodec;
 import io.vertx.mutiny.core.Vertx;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationCompletedCodec;
+import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationErrorCodec;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationRequestCodec;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -29,7 +30,7 @@ public class EventBusConfiguration {
 
         registerCodec(new PdfGenerationRequestCodec());
         registerCodec(new PdfGenerationCompletedCodec());
-
+        registerCodec(new PdfGenerationErrorCodec());
         Log.debug("Custom codecs registration process completed.");
     }
 

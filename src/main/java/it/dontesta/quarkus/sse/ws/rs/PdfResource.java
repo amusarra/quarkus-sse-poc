@@ -87,30 +87,32 @@ public class PdfResource {
     @GET
     @Path("/download/{processId}")
     @Produces(MediaType.APPLICATION_OCTET_STREAM)
-    public Response downloadPdf(@PathParam("processId") String processId) {
-        String objectKey = processId + ".pdf";
-        try {
-            InputStream stream = minioClient.getObject(
-                    GetObjectArgs.builder()
-                            .bucket(bucketName)
-                            .object(objectKey)
-                            .build());
+    public Uni<Response> downloadPdf(@PathParam("processId") String processId) {
+        return Uni.createFrom().item(() -> {
+            String objectKey = processId + ".pdf";
+            try {
+                InputStream stream = minioClient.getObject(
+                        GetObjectArgs.builder()
+                                .bucket(bucketName)
+                                .object(objectKey)
+                                .build());
 
-            Response.ResponseBuilder response = Response.ok(stream);
-            response.header(HttpHeaders.CONTENT_DISPOSITION, "attachment;filename=" + objectKey);
-            response.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM);
-            return response.build();
-        } catch (ErrorResponseException e) {
-            if ("NoSuchKey".equals(e.errorResponse().code())) {
-                Log.warnf("PDF with key: %s not found in MinIO bucket: %s", objectKey, bucketName);
-                return Response.status(Response.Status.NOT_FOUND).build();
+                Response.ResponseBuilder response = Response.ok(stream);
+                response.header(HttpHeaders.CONTENT_DISPOSITION, "attachment;filename=" + objectKey);
+                response.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM);
+                return response.build();
+            } catch (ErrorResponseException e) {
+                if ("NoSuchKey".equals(e.errorResponse().code())) {
+                    Log.warnf("PDF with key: %s not found in MinIO bucket: %s", objectKey, bucketName);
+                    return Response.status(Response.Status.NOT_FOUND).build();
+                }
+                Log.errorf(e, "Failed to download PDF with key: %s from MinIO bucket: %s", objectKey, bucketName);
+                return Response.serverError().entity(e.getMessage()).build();
+            } catch (Exception e) {
+                Log.errorf(e, "An unexpected error occurred while downloading PDF with key: %s", objectKey);
+                return Response.serverError().entity(e.getMessage()).build();
             }
-            Log.errorf(e, "Failed to download PDF with key: %s from MinIO bucket: %s", objectKey, bucketName);
-            return Response.serverError().entity(e.getMessage()).build();
-        } catch (Exception e) {
-            Log.errorf(e, "An unexpected error occurred while downloading PDF with key: %s", objectKey);
-            return Response.serverError().entity(e.getMessage()).build();
-        }
+        });
     }
 
     @GET

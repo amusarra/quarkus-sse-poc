@@ -6,8 +6,6 @@ package it.dontesta.quarkus.sse.ws.rs;
 
 import java.io.InputStream;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -18,7 +16,6 @@ import io.quarkus.logging.Log;
 import io.quarkus.qute.TemplateInstance;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
-import io.smallrye.mutiny.subscription.MultiEmitter;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mutiny.core.eventbus.EventBus;
 import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationRequestCodec;

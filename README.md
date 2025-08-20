@@ -10,7 +10,7 @@ This project uses Quarkus, the Supersonic Subatomic Java Framework. For more inf
 
 To run the application and its supporting services locally, you will need the following tools:
 
--   Java Development Kit (JDK) 17 or higher
+-   Java Development Kit (JDK) 21 or higher
 -   Apache Maven 3.8.x or higher
 -   Docker and Docker Compose or Podman
 

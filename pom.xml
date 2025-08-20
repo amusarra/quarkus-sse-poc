@@ -34,7 +34,7 @@
         </developer>
     </developers>
     <properties>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
         <surefire-plugin.version>3.5.3</surefire-plugin.version>
         <quarkus.platform.version>3.25.3</quarkus.platform.version>
         <skipITs>true</skipITs>

@@ -70,7 +70,7 @@ class SseBroadcasterTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
         assertEquals(1, receivedEvents.size());
 
-        OutboundSseEvent sseEvent = receivedEvents.getFirst();
+        OutboundSseEvent sseEvent = receivedEvents.get(0);
         assertEquals("PDF_COMPLETED", sseEvent.getName());
         assertInstanceOf(PdfGenerationCompleted.class, sseEvent.getData());
         PdfGenerationCompleted receivedData = (PdfGenerationCompleted) sseEvent.getData();
@@ -100,7 +100,7 @@ class SseBroadcasterTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
         assertEquals(1, receivedEvents.size());
 
-        OutboundSseEvent sseEvent = receivedEvents.getFirst();
+        OutboundSseEvent sseEvent = receivedEvents.get(0);
         assertEquals("PDF_ERROR", sseEvent.getName());
         assertInstanceOf(PdfGenerationError.class, sseEvent.getData());
         PdfGenerationError receivedData = (PdfGenerationError) sseEvent.getData();

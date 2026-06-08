@@ -36,7 +36,7 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <surefire-plugin.version>3.5.3</surefire-plugin.version>
-        <quarkus.platform.version>3.25.3</quarkus.platform.version>
+        <quarkus.platform.version>3.36.1</quarkus.platform.version>
         <skipITs>true</skipITs>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -98,16 +98,16 @@
         <dependency>
             <groupId>io.quarkiverse.minio</groupId>
             <artifactId>quarkus-minio</artifactId>
-            <version>3.8.4</version>
+            <version>3.8.6</version>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5</artifactId>
+            <artifactId>quarkus-junit</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-mockito</artifactId>
+            <artifactId>quarkus-junit-mockito</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -171,6 +171,7 @@
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
+          <argLine>@{argLine}</argLine>
                 </configuration>
             </plugin>
             <plugin>
@@ -191,6 +192,7 @@
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
+          <argLine>@{argLine}</argLine>
                 </configuration>
             </plugin>
             <plugin>

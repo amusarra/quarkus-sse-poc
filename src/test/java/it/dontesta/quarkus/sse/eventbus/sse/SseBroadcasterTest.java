@@ -17,12 +17,11 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.smallrye.mutiny.Multi;
-import io.vertx.core.eventbus.DeliveryOptions;
-import io.vertx.mutiny.core.eventbus.EventBus;
-import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationCompletedCodec;
-import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationErrorCodec;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationCompleted;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationError;
 import jakarta.inject.Inject;
@@ -30,7 +29,7 @@ import jakarta.ws.rs.sse.OutboundSseEvent;
 
 @QuarkusTest
 @Tag("publish-subscribe")
-@Tag("eventbus")
+@Tag("redis")
 @Tag("sse")
 class SseBroadcasterTest {
 
@@ -38,18 +37,21 @@ class SseBroadcasterTest {
     SseBroadcaster sseBroadcaster;
 
     @Inject
-    EventBus eventBus;
+    ReactiveRedisDataSource reactiveRedisDS;
+
+    @Inject
+    ObjectMapper objectMapper;
 
     @Inject
     @ConfigProperty(name = "pdf.eventbus.destination.completed")
-    String completedDestination;
+    String completedChannel;
 
     @Inject
     @ConfigProperty(name = "pdf.eventbus.destination.errors")
-    String errorsDestination;
+    String errorsChannel;
 
     @Test
-    void testHandleCompletionEvent() throws InterruptedException {
+    void testHandleCompletionEvent() throws Exception {
         String processId = UUID.randomUUID().toString();
         String downloadUrl = "/api/pdf/download/" + processId;
         PdfGenerationCompleted completionEvent = new PdfGenerationCompleted(processId, downloadUrl);
@@ -64,10 +66,13 @@ class SseBroadcasterTest {
                 Throwable::printStackTrace,
                 latch::countDown);
 
-        eventBus.publish(completedDestination, completionEvent, new DeliveryOptions().setCodecName(
-                PdfGenerationCompletedCodec.CODEC_NAME));
+        // Publish the event to Redis — SseBroadcaster is subscribed and will forward it.
+        String json = objectMapper.writeValueAsString(completionEvent);
+        reactiveRedisDS.pubsub(String.class)
+                .publish(completedChannel, json)
+                .subscribe().with(count -> {}, err -> System.err.println("Redis publish error: " + err.getMessage()));
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "Stream should complete within 10 seconds");
         assertEquals(1, receivedEvents.size());
 
         OutboundSseEvent sseEvent = receivedEvents.getFirst();
@@ -79,7 +84,7 @@ class SseBroadcasterTest {
     }
 
     @Test
-    void testHandleErrorEvent() throws InterruptedException {
+    void testHandleErrorEvent() throws Exception {
         String processId = UUID.randomUUID().toString();
         String errorMessage = "PDF generation failed";
         PdfGenerationError errorEvent = new PdfGenerationError(processId, errorMessage);
@@ -94,10 +99,13 @@ class SseBroadcasterTest {
                 Throwable::printStackTrace,
                 latch::countDown);
 
-        eventBus.publish(errorsDestination, errorEvent, new DeliveryOptions().setCodecName(
-                PdfGenerationErrorCodec.CODEC_NAME));
+        // Publish the event to Redis — SseBroadcaster is subscribed and will forward it.
+        String json = objectMapper.writeValueAsString(errorEvent);
+        reactiveRedisDS.pubsub(String.class)
+                .publish(errorsChannel, json)
+                .subscribe().with(count -> {}, err -> System.err.println("Redis publish error: " + err.getMessage()));
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Stream should complete within 5 seconds");
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "Stream should complete within 10 seconds");
         assertEquals(1, receivedEvents.size());
 
         OutboundSseEvent sseEvent = receivedEvents.getFirst();

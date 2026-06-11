@@ -1,0 +1,218 @@
+# =============================================================================
+# docker-compose.yml — quarkus-sse-poc full-stack deployment
+#
+# Compatible with: podman-compose ≥ 1.0  /  podman compose (Podman ≥ 4.7)
+#
+# Services
+# ────────
+#  redis       Redis 7 — cross-instance Pub/Sub transport
+#  minio       MinIO   — object storage for generated PDFs
+#  minio-init  one-shot init container — creates the pdf-bucket
+#  app-1       Quarkus instance 1 (JVM mode)
+#  app-2       Quarkus instance 2 (JVM mode)
+#  nginx       Reverse proxy / load balancer (single entry point → :8080)
+#
+# Prerequisites
+# ─────────────
+#  1. (macOS) Ensure the Podman Machine is running:
+#       podman machine init   # first time only
+#       podman machine start
+#
+#  2. Build the application JAR:
+#       ./mvnw package -DskipTests
+#
+#  3. Build the container image (from the project root):
+#       podman build -f src/main/docker/Dockerfile.jvm \
+#                    -t quarkus/quarkus-sse-poc-jvm:latest .
+#
+#  4. Start the stack (from this directory):
+#       podman-compose up -d
+#     or with Podman ≥ 4.7 (built-in compose):
+#       podman compose up -d
+#     or from the project root:
+#       podman compose -f src/main/docker/docker-compose.yml up -d
+#
+#  5. Tear down:
+#       podman compose down -v   # -v also removes named volumes
+#
+# Entry points
+# ────────────
+#  Application  → http://localhost:8080      (rootless-safe default port)
+#  MinIO UI     → http://localhost:8080/minio-console/
+#  MinIO API    → http://localhost:9000      (direct, for S3-compatible clients)
+#
+# Notes on rootless Podman
+# ─────────────────────────
+#  Rootless containers cannot bind to ports < 1024.
+#  NGINX_HTTP_PORT defaults to 8080 in .env — change to 80 only when running
+#  as root or when net.ipv4.ip_unprivileged_port_start ≤ 80 is configured.
+# =============================================================================
+
+name: quarkus-sse-poc
+
+# ── Reusable extension fragments ──────────────────────────────────────────────
+x-app-common: &app-common
+  image: ${APP_IMAGE:-quarkus/quarkus-sse-poc-jvm:latest}
+  restart: unless-stopped
+  environment:
+    # Redis — Quarkus converts property names to env-var format automatically:
+    #   quarkus.redis.hosts → QUARKUS_REDIS_HOSTS
+    QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+    # MinIO
+    QUARKUS_MINIO_HOST: http://minio:9000
+    QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
+    QUARKUS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+    QUARKUS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # Custom application properties
+    PDF_MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-pdf-bucket}
+  depends_on:
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+  healthcheck:
+    # Quarkus exposes a liveness probe on /q/health/live when SmallRye Health
+    # is present; fall back to the PDF generator page otherwise.
+    test: ["CMD-SHELL", "curl -sf http://localhost:8080/q/health/live"]
+    interval: 15s
+    timeout: 5s
+    retries: 5
+    start_period: 30s
+  networks:
+    - backend
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: sse-poc-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+        --save 60 1
+        --loglevel warning
+    ports:
+      # Exposed for local debugging only; remove in a hardened environment.
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend
+
+  # ── MinIO ────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: sse-poc-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      # S3-compatible API — exposed for direct client access (e.g., mc, AWS CLI)
+      - "9000:9000"
+      # MinIO web console — also reachable via Nginx at /minio-console/
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend
+
+  # ── MinIO bucket initializer (one-shot) ────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: sse-poc-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        echo 'Configuring MinIO client...' &&
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
+        mc mb --ignore-existing local/${MINIO_BUCKET_NAME:-pdf-bucket} &&
+        mc anonymous set download local/${MINIO_BUCKET_NAME:-pdf-bucket} &&
+        echo 'Bucket ${MINIO_BUCKET_NAME:-pdf-bucket} is ready.'
+      "
+    networks:
+      - backend
+
+  # ── Quarkus application — instance 1 ────────────────────────────────────────
+  app-1:
+    <<: *app-common
+    container_name: sse-poc-app-1
+    environment:
+      # Inherit common env and add instance identifier for log tracing
+      QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+      QUARKUS_MINIO_HOST: http://minio:9000
+      QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
+      QUARKUS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      QUARKUS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      PDF_MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-pdf-bucket}
+      APP_INSTANCE_ID: app-1
+
+  # ── Quarkus application — instance 2 ────────────────────────────────────────
+  app-2:
+    <<: *app-common
+    container_name: sse-poc-app-2
+    environment:
+      QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+      QUARKUS_MINIO_HOST: http://minio:9000
+      QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
+      QUARKUS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      QUARKUS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      PDF_MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-pdf-bucket}
+      APP_INSTANCE_ID: app-2
+
+  # ── Nginx reverse proxy / load balancer ────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: sse-poc-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app-1:
+        condition: service_healthy
+      app-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/nginx-health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+      - frontend
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+
+# ── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  # Internal network — Redis, MinIO, and app instances
+  backend:
+    driver: bridge
+  # External-facing network — only Nginx is attached
+  frontend:
+    driver: bridge
+
+

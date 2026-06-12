@@ -19,13 +19,13 @@ state: Release
 
 ## Cronologia delle revisioni
 
-| Versione | Data       | Autore          | Descrizione delle Modifiche                                                                                                              |
-|:---------|:-----------|:----------------|:-----------------------------------------------------------------------------------------------------------------------------------------|
-| 1.0.0    | 2025-06-21 | Antonio Musarra | Prima release                                                                                                                            |
-| 1.1.0    | 2025-06-22 | Antonio Musarra | Aggiunti i capitoli bonus, immagini e didascalie                                                                                         |
-| 1.2.0    | 2025-06-23 | Antonio Musarra | Aggiornamento per riflettere l'uso di MinIO, fj-doc e il nuovo formato degli eventi SSE                                                  |
-| 1.3.0    | 2026-06-11 | Antonio Musarra | Evoluzione verso architettura distribuita: Redis Pub/Sub, pending-event buffer, fix race condition, resource leak, deploy Podman Compose |
-| 1.3.1    | 2026-06-12 | Antonio Musarra | Correzione: `downloadPdf` usava `Uni.createFrom().item()` in modo errato; sostituito con `@Blocking` per proteggere l'Event Loop        |
+| Versione | Data       | Autore          | Descrizione delle Modifiche                                                                                                                                                        |
+|:---------|:-----------|:----------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1.0.0    | 2025-06-21 | Antonio Musarra | Prima release                                                                                                                                                                      |
+| 1.1.0    | 2025-06-22 | Antonio Musarra | Aggiunti i capitoli bonus, immagini e didascalie                                                                                                                                   |
+| 1.2.0    | 2025-06-23 | Antonio Musarra | Aggiornamento per riflettere l'uso di MinIO, fj-doc e il nuovo formato degli eventi SSE                                                                                            |
+| 1.3.0    | 2026-06-11 | Antonio Musarra | Evoluzione verso architettura distribuita: Redis Pub/Sub, pending-event buffer, fix race condition, resource leak, deploy Podman Compose                                           |
+| 1.3.1    | 2026-06-12 | Antonio Musarra | Correzione: `downloadPdf` usava `Uni.createFrom().item()` in modo errato; sostituito con `@Blocking` per proteggere l'Event Loop. <br/>Aggiunta tabella comparativa Redis vs Kafka |
 
 [TOC]
 
@@ -599,7 +599,7 @@ sse-poc-nginx | GET /api/pdf/status/7f390554-… 200 — upstream=10.89.0.8:8080
 
 **Console 1**: Log cross-instance — POST su app-2, SSE su app-1
 
-Il diagramma di sequenza PlantUML completo per questo scenario è disponibile in `src/docs/blog/article/resources/cross-instance-async-flow.puml`.
+Il diagramma di sequenza PlantUML completo per questo scenario è disponibile in `src/docs/blog/article/resources/diagrams/cross-instance-async-flow.puml` e visualizzabile con [PlantUML Editor (online)](https://editor.plantuml.com/uml/vLdDRkF84RxpAMgrXx64aQmVUsmhSB1ZMPunnZ-Af0qIn4RG8fjIGrGtjvkqBEmFvf9S4sJt5EIGKvuXp-CNo2kagacAf6JFxbvs3zACCMEfgjXTNTzNNxM-C17JKRm8mDNAcBgG-8PqUPsPbNJhVg2Mpgkd7pxko5_d5VmkPdeU6nYD-Z1GFNZw-0FqR6ukqzp0MyeDNDZSeCV8vP9feRfmCnNo4VQqYgLNrseYP1NmbuWR6DoEni2a1-_wOnixKd1-UN7H7_Plnf2btJGm7YJ6-omK-w7dxq-vv9f57E3fh_y05eRrDi1UgzauFcaq6oVTu-PnishzA7RkXo6ZsEm_VVnFxjagU1vddkXxEp5SFt0F0ZM5I2muEYz2q4nEUHTQdMxxgDi-n6Hyd_xIQSBUb-CUFNUW5QxSmELv5uxypadpyF2W_iPbxVe1Pxm-yLpyd-jotkhuxCGxmYMmoKJp1u6RykpIChVgJXMR4uaeu3-lukxadgsEl1I-iOucqfmjydEkEewP2naoZUyQ_bNCCSvRhTLoF1FkNDA1jHg7pnYzmueDpvJsk2wOFcDu9NpyaJonxQb0QVZyqBwUiHuWpmXNX4n69OUEVVs80tFdKukgrEdYcFuKdAIAokjuQr-R5bjnwDLq7EP6-6logfnXaX0DcEbU8BYCgXLOlvY1dkDCr2DKBDZH20kPQyCXrEfn1VjmTOOEd_Vx5mSN5mv0c6yZzIc4AmM-SJZo0yPE7_02qYjssGVz_cRmWUSFkL6nTdbbA_XWsDwq_ptNKUCH-W-unxFOb7VPFzkon_ZMDiMxqfLY_FvWos5aEEQIUIupaSsdtH6bar6runFA6xwKlaPJ7RjHh3djiscFPoFijP2NjoybyNhJUiWzOGWryMH_54yAXudMmsTI_Wn5ldYUp-wmbU-mzJFFg9MlvnNywWJr2z7WwIdygNKFW_CBU9UqEg4a38a6J4I7aNQVHgVLgSBfwGwbnka1r7yBS8C5qdr15ZZ4RA35T1Q1yf558DKXgV90eL6hMUJLQlXPKPr072Pz0rlyXfoWEgJ0ZdEJB049vEKb87-A1v8eH3CEcQ9Buh5MBs526vVUdQpLieQFIqgjYN7GF8mdWJ0pGA3anP3M0k9h7UGqbmmsG9gbBkwrtMp2xOTQ3RxEdmdVEXulhvBsHLwzJtevj2oxVoGuDFHu893ldrrV8Gt4XjQ3yf1u6dV6lHZxFHNwTEsBcyAOR0MdS0Yckd6QrZVd-oqA9dQPundFE4JCpD44eSDWgVGS5ndDy70z29KA6kITU0avXQK8KFAhHHXmVDntcQPh5CvzTr161DI-jp9gbCYe8PyAH4R2H4K6wXplD0FHWB4vNvJ0_5EvgFLJk2WRKC1AOa_uFjTO_Ejf2Noj5hRsYPO-UuwpMYyiEbjoaRbQn5mjwqYj6prTN4_4avhOombdxMCxlBL5fzH7sz91y5t7GIJw2n5PPO0R39JBWenSb3QmO26YVyu9-tdqZNZ86kvyW5j3s5hictmbTvBqFcvvHfWMr3HHxC2AH-bMC4noS0c_OOKZmUr5_37QvnIhdgJyDJubbdFkLSiisLgpPAyS9HitLCYHp77g-3iicOXe5JwIaerjSF3SDHRf93AcGBGPUI2t7dKEaqf6deS0CwntZKkoZWZNL4rn6A1qfeGbACXl3ng8rAg3HhRsqlvPgwKErALthR0ExbDifsCCtAX8-C8jToXRP6-UFdv_j7jzQbrRGokLlpoxkXoznw9nOnEfHHqhgfxf7Q_keLeJqYQlLhkJ1ScN5-5hsAf9r8EVb6TNQjg5YenHMsdkSXAAE5OJv9F3ivUgW5qWc32Nn9hcEEbA0-Jo6q3cZR53f19pXVfC-a8lk8UMarLwVsVYYN6rc627sJESmuG7Qbaj2hSYXPCETOOfaDAEii2DiYdFbkXbOolW2jVHiHKKtDelkxN9ZGL6bNntgF88deViFZqUEcngaBPLmtbsb2M47kqQDZSaJQ3KF0wtb11fcLfj_Iug2HI7g2v8KMGeXAT__IKDjvxTADrMSNJlPF8lXi6kykVUxVNWgZ_kdnF6FHQnRd6uUmqB8ONwWF8hXNN0VOlg7k8jlGHCpd5aBsm0mSWDViQWKWfVMMF3Ffv6BLeJmbTornAqooI2SubW1JTGXdj5l6vaHyaUYTiWOAbhmXP9VZHVg0SEnIJboIaYtqhJ7QenYyB9VNedJYWyvpwN1k47Pp5D3ZXjC9TZ4q0fRJCxZPdsgcLexbpRjEIUa_mdeIbL_i4MBl_vx__zzsyRxT46pTjZSZQ4KGqpPUZB7nhUyda2RIWeZZCcnsa3u38Y165ic2EAq6evu-YfKyvb0LrphBB6YM55j06mWZGO8MJ_G4IJp5JTjIhevdCiIGABPGZPoehERm76uoiSr3eu0PcDVGxNtoH0eUmcjkow8FprDbtxXG9QpJ3apUsOHhMC9pWo4jb9dCuiwj4Cv-NI35gbwvstDtzSZy2K2nK77WKnyO8dkNiGZARUy_uLx35KFyAj4YcznzpOHoHRMpApdRgYrA1J9tEQKEs5aH6OgXNmnn2Pa0xKfq7NPWGDeXdcErk8BXx0i2GaQZLxpsO7NzHcUWVrmflIRLFFjeGI4HsSx1eHbIuQte_7W_rMevNSE52n52uTaWvQlPFPZT5f-SB8SRx0qeiNWUFy7m00]) o con il plugin PlantUML per IDE. 
 
 > **Nota sul buffer difensivo su app-2**: poiché entrambe le istanze sono sottoscritte allo stesso canale Redis, `app-2` riceve anch'essa l'evento ma non ha un processor attivo per quel `processId`. Esegue quindi il buffer su Redis come protezione contro la race condition. In questo caso specifico l'evento è già stato consegnato da `app-1`, quindi la chiave Redis scadrà dopo 300 s senza consumatori — comportamento corretto e atteso.
 
@@ -715,6 +715,27 @@ Le evoluzioni rispetto alla versione originale sono:
 Il modello implementato è flessibile e può essere facilmente esteso per comunicare stati intermedi (es. `GENERATION_STARTED`, `UPLOADING_TO_STORAGE`) o scalato ulteriormente aggiungendo nuove istanze senza alcuna modifica al codice — è sufficiente aggiornare il file `docker-compose.yml`.
 
 In sintesi, la combinazione delle funzionalità reattive di Quarkus con Redis Pub/Sub e i pattern di concorrenza di Java offre un toolkit potente per costruire applicazioni moderne, resilienti e performanti, in grado di offrire un'eccellente esperienza utente anche in scenari di produzione distribuiti.
+
+### Perché Redis Pub/Sub e non Kafka (o RabbitMQ)?
+
+Nella fase di design è stato valutato anche l'uso di **Apache Kafka**, spesso citato come soluzione di riferimento per la messaggistica distribuita. La scelta è ricaduta su Redis Pub/Sub per ragioni precise legate alla natura del caso d'uso.
+
+| Criterio | Redis Pub/Sub | Apache Kafka |
+|:---------|:--------------|:-------------|
+| **Modello di consegna** | Fan-out: **tutti** i subscriber ricevono ogni messaggio | Consumer group: **un solo** consumer per gruppo riceve ogni messaggio |
+| **Persistenza** | Nessuna (fire-and-forget); buffer temporaneo via `SETEX` (TTL) | Log persistente su disco, retention configurabile |
+| **Latenza** | Sub-millisecondo | Decine di millisecondi (batching + fsync) |
+| **Complessità operativa** | Singolo processo, zero configurazione aggiuntiva | Broker, topic, partizioni, offset, consumer group, KRaft/ZooKeeper |
+| **Quarkus Dev Services** | Container Redis avviato automaticamente con una dipendenza | Container Kafka disponibile, ma più pesante in dev |
+| **Message replay** | Non supportato | Supportato (rilettura da offset) |
+
+Il punto più rilevante è il **modello di consegna**. In questo caso d'uso occorre che il messaggio di completamento del PDF arrivi a **tutte** le istanze dell'applicazione, perché non è possibile sapere a priori quale istanza ospita la connessione SSE del client. Redis Pub/Sub realizza esattamente questo pattern (fan-out), mentre Kafka con i consumer group fa esattamente l'opposto: garantisce che **un solo** consumer per gruppo elabori ogni messaggio — il che sarebbe corretto per elaborazioni idempotenti, ma sbagliato per la notifica SSE distribuita.
+
+La **persistenza** di Kafka, altro suo punto di forza, è in questo contesto superflua: le notifiche SSE sono eventi transitori. Il meccanismo di pending-event buffer su Redis (chiave con TTL = 300 s) è sufficiente per gestire l'unico scenario di "evento in ritardo" rilevante — quello in cui il PDF viene completato prima che il client apra lo stream SSE.
+
+Infine, la **complessità operativa** di Kafka avrebbe appesantito significativamente lo stack di sviluppo e il file `docker-compose.yml` senza portare benefici concreti per questo carico di lavoro. Redis è già largamente utilizzato come cache in molte architetture applicative: aggiungere Pub/Sub riutilizza l'infrastruttura esistente.
+
+> **Quando scegliere Kafka invece di Redis Pub/Sub**: se il requisito fosse la **re-processabilità** degli eventi (es. audit log, event sourcing, replay storico), la **garanzia di consegna at-least-once con durabilità** su cluster multi-nodo, o throughput nell'ordine di milioni di messaggi al secondo, Kafka sarebbe la scelta corretta. Per notifiche SSE leggere e a bassa latenza, Redis è la soluzione più adatta.
 
 <div style="page-break-after: always; break-after: page;"></div>
 

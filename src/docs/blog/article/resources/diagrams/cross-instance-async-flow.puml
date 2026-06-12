@@ -1,0 +1,168 @@
+@startuml cross-instance-async-flow
+'──────────────────────────────────────────────────────────────────────────────
+' Quarkus SSE PoC — Cross-Instance Async Flow
+'
+' Scenario: Nginx (round-robin) routes POST and GET SSE to DIFFERENT instances.
+'   POST /api/pdf/generate  → app-2  (10.89.0.9:8080)
+'   GET  /api/pdf/status/…  → app-1  (10.89.0.8:8080)
+'
+' Observed log timestamp range: 13:27:25 – 13:27:30 (UTC)
+' Process ID: 7f390554-6ca2-4eae-bdc2-4ccee13fa9d7  (abbreviated → 7f390554)
+'──────────────────────────────────────────────────────────────────────────────
+
+title Quarkus SSE PoC — Cross-Instance Async Flow\n(POST → app-2 | SSE stream → app-1)
+
+skinparam sequenceArrowThickness 1.5
+skinparam sequenceGroupBorderThickness 1
+skinparam sequenceLifeLineBorderColor #555555
+skinparam sequenceParticipantBorderColor #333333
+skinparam sequenceParticipantBackgroundColor #F8F8F8
+skinparam noteBorderColor #AAAAAA
+skinparam noteBackgroundColor #FFFFF0
+
+actor       "Browser\n(Client)"          as C
+
+box "Nginx\n(reverse proxy / LB)" #EEF4FF
+  participant "Nginx"                    as N
+end box
+
+box "app-2  (10.89.0.9:8080)" #FFF4EE
+  participant "PdfResource"              as PR2
+  participant "Vert.x EventBus"          as EB2
+  participant "PdfEventProcessor"        as PEP2
+  participant "SseBroadcaster\n(app-2)"  as SSB2
+end box
+
+box "Infrastructure" #F0FFF0
+  participant "MinIO"                    as M
+  participant "Redis\n(Pub/Sub)"         as R
+end box
+
+box "app-1  (10.89.0.8:8080)" #EEF4FF
+  participant "SseBroadcaster\n(app-1)"  as SSB1
+  participant "PdfResource"              as PR1
+end box
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [1] PDF Generation Request  (13:27:25.313) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+C  ->  N   : POST /api/pdf/generate
+note right of N
+  Nginx routes to **app-2**
+  (round-robin upstream: 10.89.0.9:8080)
+end note
+
+N  ->  PR2 : POST /api/pdf/generate
+activate PR2
+
+PR2 -> PR2 : generate processId\n**7f390554**
+PR2 ->  EB2 : publish PdfGenerationRequest\n(processId=7f390554)
+PR2 -->  N  : **200 OK** { processId }
+deactivate PR2
+
+N  -->  C  : **200 OK** { processId }
+
+EB2 ->  PEP2 : deliver PdfGenerationRequest
+activate PEP2
+PEP2 -> PEP2 : schedule PDF generation\n(delay = 5 s)
+note right of PEP2 #FFF4EE
+  PdfEventProcessor parks the task
+  on a worker thread pool.
+  Processing will complete ~13:27:30.
+end note
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [2] SSE Stream Registration  (13:27:25.338) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+C  ->  N   : GET /api/pdf/status/**7f390554**
+note right of N
+  Nginx routes to **app-1**
+  (round-robin upstream: 10.89.0.8:8080)
+  — different instance from the POST!
+end note
+
+N  ->  PR1 : GET /api/pdf/status/7f390554
+activate PR1
+
+PR1 ->  SSB1 : createStream(7f390554)
+activate SSB1
+SSB1 -> SSB1 : register MultiEmitter\nin local processors map\n(key = 7f390554)
+SSB1 -> SSB1 : checkPendingEvents(7f390554)\n→ nothing in Redis yet
+
+PR1 --> N   : **200 SSE** (text/event-stream, chunked)
+deactivate PR1
+
+N  --> C   : **200 SSE stream open** ← waiting for events…
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [3] PDF Processing  (13:27:30.735  — 5 s later) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+PEP2 ->  M  : upload PDF\n(key: 7f390554.pdf)
+M   --> PEP2 : **upload OK**
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [4] Redis Pub/Sub Notification  (13:27:30.736–738) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+PEP2 ->  R  : PUBLISH **custom-pdf-completed-destination**\n{ processId: 7f390554, key: 7f390554.pdf }
+note right of PEP2 #FFF4EE
+  Log: "null receivers" — Redis async callback
+  returns null; actual delivery confirmed
+  by app-1 subscriber (see below).
+end note
+
+deactivate PEP2
+
+R   --> SSB1 : message received\n(app-1 is subscribed)
+R   --> SSB2 : message received\n(app-2 is also subscribed)
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [5a] app-1 — SSE Event Delivery  (13:27:30.737) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+SSB1 -> SSB1 : lookup processors map\n→ **processor found** for 7f390554 ✅
+SSB1 -->  C  : SSE event:\nevent: **PDF_COMPLETED**\ndata: { processId, minioKey }
+note left of C
+  Browser EventSource fires
+  a "PDF_COMPLETED" message event.
+  SSE connection can now be closed.
+end note
+
+SSB1 -> SSB1 : onCancellation callback\n→ remove processor for 7f390554
+deactivate SSB1
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [5b] app-2 — Defensive Buffer (race-condition guard)  (13:27:30.738) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+SSB2 -> SSB2 : lookup processors map\n→ **no processor** for 7f390554 ⚠️
+note right of SSB2 #FFF4EE
+  app-2 never hosted the SSE stream
+  for this processId.  It cannot know
+  whether app-1 already delivered it.
+end note
+
+SSB2 ->  R  : SETEX **pending:completed:7f390554**\n{ event payload }  TTL = 300 s
+note right of R #FFFFF0
+  Defensive buffer: if the SSE client
+  had NOT yet connected, the next call
+  to createStream() on ANY instance
+  would consume this via GETDEL (atomic).
+  Here the event was already delivered
+  by app-1 → the key will simply expire
+  after 300 s with no consumer.
+end note
+
+R  --> SSB2 : **OK** (key stored)
+
+' ─────────────────────────────────────────────────────────────────────────────
+== [6] SSE Stream Closed  (13:27:30.749) ==
+' ─────────────────────────────────────────────────────────────────────────────
+
+N  --> C   : HTTP/1.1 **200** (SSE stream closed)\nupstream=10.89.0.8:8080
+
+@enduml
+

@@ -17,20 +17,22 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.fugerit.java.doc.base.config.DocConfig;
 import org.fugerit.java.doc.base.process.DocProcessContext;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.quarkus.arc.Unremovable;
 import io.quarkus.logging.Log;
+import io.quarkus.redis.datasource.ReactiveRedisDataSource;
+import io.quarkus.redis.datasource.pubsub.ReactivePubSubCommands;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
-import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mutiny.core.eventbus.EventBus;
 import io.vertx.mutiny.core.eventbus.Message;
 import io.vertx.mutiny.core.eventbus.MessageConsumer;
-import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationCompletedCodec;
-import it.dontesta.quarkus.sse.eventbus.codec.PdfGenerationErrorCodec;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationCompleted;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationError;
 import it.dontesta.quarkus.sse.eventbus.model.PdfGenerationRequest;
@@ -48,6 +50,15 @@ public class PdfEventProcessor {
     private final ScheduledExecutorService executor;
     private final MinioClient minioClient;
     private final DocHelper docHelper;
+
+    @Inject
+    ReactiveRedisDataSource reactiveRedisDS;
+
+    @Inject
+    ObjectMapper objectMapper;
+
+    /** Dedicated Redis publisher — initialised once at startup. */
+    private ReactivePubSubCommands<String> redisPublisher;
 
     @Inject
     @ConfigProperty(name = "pdf.eventbus.destination.requests", defaultValue = "pdf-generation-requests")
@@ -88,6 +99,7 @@ public class PdfEventProcessor {
 
     void onStart(@Observes StartupEvent ev) {
         Log.debug("Initialization of the PdfEventProcessor...");
+        redisPublisher = reactiveRedisDS.pubsub(String.class);
         try {
             boolean found = minioClient.bucketExists(BucketExistsArgs.builder().bucket(bucketName).build());
             if (!found) {
@@ -148,7 +160,7 @@ public class PdfEventProcessor {
         Log.debugf("Received PDF generation request with ID: %s", request.processId());
 
         generatePdfAsync(request.processId())
-                .thenAccept(
+                        .thenAccept(
                         pdfPath -> {
                             String downloadUrl = String.format("/api/pdf/download/%s", request.processId());
                             PdfGenerationCompleted completionEvent = new PdfGenerationCompleted(request.processId(),
@@ -157,10 +169,7 @@ public class PdfEventProcessor {
                             Log.debugf(
                                     "Attempting to send PDF completion notification for ID: %s", request.processId());
 
-                            eventBus.publish(
-                                    completedDestination,
-                                    completionEvent,
-                                    new DeliveryOptions().setCodecName(PdfGenerationCompletedCodec.CODEC_NAME));
+                            publishToRedis(completedDestination, completionEvent);
                             Log.debugf("PDF completion notification sent for ID: %s", request.processId());
                         })
                 .exceptionally(ex -> {
@@ -169,13 +178,28 @@ public class PdfEventProcessor {
 
                     PdfGenerationError errorEvent = new PdfGenerationError(request.processId(), errorMessage);
 
-                    eventBus.publish(
-                            errorsDestination,
-                            errorEvent,
-                            new DeliveryOptions().setCodecName(PdfGenerationErrorCodec.CODEC_NAME));
+                    publishToRedis(errorsDestination, errorEvent);
                     Log.debugf("PDF generation error notification sent for ID: %s", request.processId());
                     return null;
                 });
+    }
+
+    /**
+     * Serializes {@code event} to JSON and publishes it to the given Redis channel.
+     * Errors are logged but do not propagate to the caller.
+     */
+    private void publishToRedis(String channel, Object event) {
+        try {
+            String json = objectMapper.writeValueAsString(event);
+            // ReactivePubSubCommands.publish() returns Uni<Void>: the Redis subscriber
+            // count is discarded by the Quarkus API, so it cannot be logged here.
+            redisPublisher.publish(channel, json)
+                    .subscribe().with(
+                            v -> Log.debugf("Published event to Redis channel '%s'", channel),
+                            err -> Log.errorf(err, "Failed to publish event to Redis channel: '%s'", channel));
+        } catch (JsonProcessingException e) {
+            Log.errorf(e, "Failed to serialize event for Redis channel: '%s'", channel);
+        }
     }
 
     // This method simulates the asynchronous generation of a PDF

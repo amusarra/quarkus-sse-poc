@@ -1,29 +1,31 @@
 ---
 title: "Gestire task asincroni con Server-Sent Events (SSE) e Quarkus"
-summary: "Analizzeremo un'applicazione Proof of Concept (PoC) che dimostra come utilizzare i Server-Sent Events (SSE) per notificare a un client lo stato di un processo asincrono di lunga durata, come la generazione di un PDF. Esploreremo l'architettura, il codice sorgente e gli strumenti per testare la soluzione."
+summary: "Analizzeremo un'applicazione Proof of Concept (PoC) che dimostra come utilizzare i Server-Sent Events (SSE) per notificare a un client lo stato di un processo asincrono di lunga durata, come la generazione di un PDF. Esploreremo l'architettura distribuita con Redis Pub/Sub, il codice sorgente e gli strumenti per testare la soluzione in un ambiente multi-istanza con Podman Compose."
 author: "Antonio Musarra"
 create-date: "2025-06-21"
 categories: ["Web Application"]
-tags: ["Web Application", "Quarkus", "SSE", "MinIO", "fj-doc"]
+tags: ["Web Application", "Quarkus", "SSE", "MinIO", "fj-doc", "Redis", "Podman"]
 image: ""
-date: "2025-06-22"
+date: "2026-06-12"
 status: "published"
 layout: "article"
 slug: "gestire-task-asincroni-con-sse-e-quarkus"
 permalink: ""
 lang: "it"
-version: "v1.2.0"
+version: "v1.3.1"
 scope: "Public"
 state: Release
 ---
 
 ## Cronologia delle revisioni
 
-| Versione | Data       | Autore          | Descrizione delle Modifiche                                                             |
-|:---------|:-----------|:----------------|:----------------------------------------------------------------------------------------|
-| 1.0.0    | 2025-06-21 | Antonio Musarra | Prima release                                                                           |
-| 1.1.0    | 2025-06-22 | Antonio Musarra | Aggiunti i capitoli bonus, immagini e didascalie                                        |
-| 1.2.0    | 2025-06-23 | Antonio Musarra | Aggiornamento per riflettere l'uso di MinIO, fj-doc e il nuovo formato degli eventi SSE |
+| Versione | Data       | Autore          | Descrizione delle Modifiche                                                                                                                                                        |
+|:---------|:-----------|:----------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1.0.0    | 2025-06-21 | Antonio Musarra | Prima release                                                                                                                                                                      |
+| 1.1.0    | 2025-06-22 | Antonio Musarra | Aggiunti i capitoli bonus, immagini e didascalie                                                                                                                                   |
+| 1.2.0    | 2025-06-23 | Antonio Musarra | Aggiornamento per riflettere l'uso di MinIO, fj-doc e il nuovo formato degli eventi SSE                                                                                            |
+| 1.3.0    | 2026-06-11 | Antonio Musarra | Evoluzione verso architettura distribuita: Redis Pub/Sub, pending-event buffer, fix race condition, resource leak, deploy Podman Compose                                           |
+| 1.3.1    | 2026-06-12 | Antonio Musarra | Correzione: `downloadPdf` usava `Uni.createFrom().item()` in modo errato; sostituito con `@Blocking` per proteggere l'Event Loop. <br/>Aggiunta tabella comparativa Redis vs Kafka |
 
 [TOC]
 
@@ -36,6 +38,8 @@ La gestione di task asincroni in un'applicazione web può essere una sfida, spec
 In questo articolo, analizzeremo un'applicazione Proof of Concept (PoC) che dimostra come utilizzare i Server-Sent Events (SSE) per notificare a un client lo stato di un processo asincrono di lunga durata, come la generazione di un PDF.
 Esploreremo l'architettura, il codice sorgente e gli strumenti per testare la soluzione.
 A differenza di una semplice simulazione, questa PoC genera realmente un file PDF utilizzando la libreria **fj-doc** e lo archivia su uno storage a oggetti **MinIO**.
+
+L'architettura è stata evoluta per supportare lo **scaling orizzontale**: il componente `SseBroadcaster` non si basa più su una mappa in-memory locale, ma utilizza **Redis Pub/Sub** come canale di notifica cross-instance. In questo modo, qualsiasi istanza dell'applicazione può consegnare un evento SSE al client corretto, indipendentemente da quale istanza ha processato la richiesta di generazione PDF. È inoltre implementato un meccanismo di **pending-event buffer** su Redis per risolvere la race condition in cui Redis pubblica l'evento prima che il client SSE apra la connessione.
 
 
 
@@ -69,39 +73,53 @@ Il flusso dell'applicazione può essere riassunto come segue:
 ```mermaid
 sequenceDiagram
    participant A as Client
-   participant B as Server (API REST/SSE)
-   participant C as Processo di generazione (Worker)
+   participant N as Nginx (Load Balancer)
+   participant B1 as app-1 (REST/SSE)
+   participant B2 as app-2 (REST/SSE)
+   participant C as PdfEventProcessor (Worker)
+   participant R as Redis (Pub/Sub)
    participant D as MinIO (Object Storage)
    participant E as Interfaccia utente
 
-   A->>B: POST /api/pdf/generate
-   B->>C: Invia richiesta su Event Bus
-   B->>A: Risposta con processId
-   A->>B: GET /api/pdf/status/{processId} (Sottoscrizione SSE)
+   A->>N: POST /api/pdf/generate
+   N->>B2: instrada su app-2 (round-robin)
+   B2->>C: Pubblica PdfGenerationRequest su Vert.x EventBus
+   B2->>N: 200 OK { processId }
+   N->>A: 200 OK { processId }
+
+   A->>N: GET /api/pdf/status/{processId} (Sottoscrizione SSE)
+   N->>B1: instrada su app-1 (round-robin — istanza diversa!)
+   B1->>B1: Registra SSE stream (BroadcastProcessor locale)
 
    alt Flusso di successo
       C->>C: Genera PDF con fj-doc
       C->>D: Carica PDF su MinIO
-      C->>B: Notifica completamento su Event Bus
-      B->>A: Invia evento SSE (PDF_COMPLETED)
+      C->>R: PUBLISH pdf-completed { processId, pdfUrl }
+      R-->>B1: messaggio (subscriber su app-1)
+      R-->>B2: messaggio (subscriber su app-2)
+      B1->>A: Evento SSE: PDF_COMPLETED
       A->>E: Visualizza link per il download
    else Flusso di errore
       C->>C: Errore durante la generazione del PDF
-      C->>B: Notifica errore su Event Bus
-      B->>A: Invia evento SSE (PDF_ERROR)
+      C->>R: PUBLISH pdf-errors { processId, error }
+      R-->>B1: messaggio (subscriber su app-1)
+      R-->>B2: messaggio (subscriber su app-2)
+      B1->>A: Evento SSE: PDF_ERROR
       A->>E: Visualizza messaggio di errore
    end
 ```
 
-**Figura 1**: Flusso dell'applicazione con Server-Sent Events
+**Figura 1**: Flusso distribuito dell'applicazione con Redis Pub/Sub e Server-Sent Events
 
 Quali sono i componenti principali di questa architettura?
 
-- **Client**: invia la richiesta di generazione del PDF e si mette in ascolto per gli aggiornamenti.
-- **Server**: gestisce la richiesta, avvia il processo di generazione e invia gli aggiornamenti tramite SSE.
-- **Processo di generazione**: esegue la logica per generare il PDF in background utilizzando la libreria `fj-doc` e salvando il risultato su uno storage a oggetti MinIO.
-- **SSE**: gestisce la comunicazione degli aggiornamenti di stato dal server al client.
-- **Interfaccia utente**: mostra lo stato della generazione del PDF all'utente.
+- **Client**: invia la richiesta di generazione del PDF e si mette in ascolto per gli aggiornamenti via SSE.
+- **Nginx**: funge da reverse proxy e load balancer round-robin; la configurazione SSE (`proxy_buffering off`, `proxy_read_timeout` elevato, `Connection ''`) è già inclusa.
+- **PdfResource**: espone gli endpoint REST e SSE su ogni istanza dell'applicazione.
+- **SseBroadcaster**: sottoscrive i canali Redis all'avvio; consegna gli eventi SSE ai client connessi localmente; implementa il **pending-event buffer** (Redis `SETEX`/`GETDEL`) per gestire la race condition.
+- **PdfEventProcessor**: esegue la logica di generazione del PDF in background su un pool di thread dedicato usando la libreria `fj-doc`, carica il risultato su MinIO e pubblica l'esito su Redis Pub/Sub.
+- **Redis**: canale Pub/Sub cross-instance. Memorizza anche gli eventi pendenti (TTL = 300 s) per i client SSE che si connettono in ritardo.
+- **MinIO**: storage a oggetti S3-compatibile per i file PDF generati.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -110,9 +128,10 @@ Questa architettura consente di separare le responsabilità, mantenendo il codic
 Questa PoC è stata realizzata utilizzando il framework cloud native Quarkus. Quali sono i componenti principali di Quarkus utilizzati in questa PoC?
 
 - **Quarkus REST**: per gestire le richieste HTTP e le risposte usando il modello non bloccante e il supporto per SSE.
-- **Quarkus Event Bus**: per gestire la comunicazione asincrona tra i vari componenti dell'applicazione.
+- **Quarkus Event Bus**: per gestire la comunicazione asincrona intra-JVM tra `PdfResource` e `PdfEventProcessor`.
 - **Quarkus Mutiny**: per gestire la programmazione reattiva e le operazioni asincrone in modo semplice e intuitivo.
 - **Quarkus MinIO Client**: per interagire con lo storage a oggetti MinIO e gestire il caricamento dei file PDF generati.
+- **Quarkus Redis Client**: per il canale Pub/Sub cross-instance e il pending-event buffer; in modalità dev/test Quarkus Dev Services avvia automaticamente un container Redis.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -154,7 +173,23 @@ public Uni<String> generatePdf() {
 Questo è un tipo di operazione non bloccante che restituisce un `Uni<String>`, per essere eseguita sul thread di I/O (event loop), garantendo così prestazioni elevate e scalabilità. Il metodo genera un ID univoco per la richiesta e pubblica un evento sull'Event Bus di Quarkus per avviare il processo di generazione del PDF.
 
 L'endpoint `/download/{processId}` permette di scaricare il PDF generato dal servizio di storage S3 MinIO.
-Quest'operazione è anch'essa non bloccante e restituisce un `Uni<Response>`, che rappresenta la risposta HTTP con il file PDF come contenuto. La logica bloccante per il download del PDF da MinIO viene eseguita all'interno di un blocco `Uni.createFrom().item(() -> {...})`, per garantire che non blocchi il thread di I/O.
+Quest'operazione esegue una chiamata di I/O bloccante (`minioClient.getObject(...)` usa il client MinIO sincrono/imperativo) e per questo motivo è annotata con **`@Blocking`**.
+
+> **⚠️ Errore comune — `Uni.createFrom().item()` non protegge l'Event Loop**
+>
+> Un pattern che può trarre in inganno è il seguente:
+> ```java
+> // ❌ NON è sicuro: il lambda viene eseguito sul thread del subscriber,
+> //    che in Quarkus REST è l'event loop thread!
+> return Uni.createFrom().item(() -> { minioClient.getObject(...); ... });
+> ```
+> `Uni.createFrom().item()` **non** esegue il lambda su un worker thread. Lo esegue sul thread che si sottoscrive all'`Uni` (nel caso di un endpoint Quarkus REST, l'Vert.x event loop thread). Mettere una chiamata bloccante all'interno di questo blocco **congela ugualmente l'Event Loop**.
+>
+> Il log conferma il problema:
+> ```
+> DEBUG [PdfResource] (vert.x-eventloop-thread-3) PDF with key: … retrieved from MinIO
+> ```
+> La soluzione corretta è annotare il metodo con `@Blocking`, che istruisce Quarkus REST a eseguire l'intero metodo su un thread del **worker pool** di Vert.x, lasciando libero l'event loop.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -162,36 +197,35 @@ Quest'operazione è anch'essa non bloccante e restituisce un `Uni<Response>`, ch
 @GET
 @Path("/download/{processId}")
 @Produces(MediaType.APPLICATION_OCTET_STREAM)
-public Uni<Response> downloadPdf(@PathParam("processId") String processId) {
-    return Uni.createFrom().item(() -> {
-        String objectKey = processId + ".pdf";
-        try {
-            InputStream stream = minioClient.getObject(
-                    GetObjectArgs.builder()
-                            .bucket(bucketName)
-                            .object(objectKey)
-                            .build());
+@Blocking  // minioClient.getObject() è bloccante — deve girare sul worker pool, NON sull'event loop
+public Response downloadPdf(@PathParam("processId") String processId) {
+    String objectKey = processId + ".pdf";
+    try {
+        InputStream stream = minioClient.getObject(
+                GetObjectArgs.builder()
+                        .bucket(bucketName)
+                        .object(objectKey)
+                        .build());
 
-            Response.ResponseBuilder response = Response.ok(stream);
-            response.header(HttpHeaders.CONTENT_DISPOSITION, "attachment;filename=" + objectKey);
-            response.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM);
-            return response.build();
-        } catch (ErrorResponseException e) {
-            if ("NoSuchKey".equals(e.errorResponse().code())) {
-                Log.warnf("PDF with key: %s not found in MinIO bucket: %s", objectKey, bucketName);
-                return Response.status(Response.Status.NOT_FOUND).build();
-            }
-            Log.errorf(e, "Failed to download PDF with key: %s from MinIO bucket: %s", objectKey, bucketName);
-            return Response.serverError().entity(e.getMessage()).build();
-        } catch (Exception e) {
-            Log.errorf(e, "An unexpected error occurred while downloading PDF with key: %s", objectKey);
-            return Response.serverError().entity(e.getMessage()).build();
+        Response.ResponseBuilder response = Response.ok(stream);
+        response.header(HttpHeaders.CONTENT_DISPOSITION, "attachment;filename=" + objectKey);
+        response.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM);
+        return response.build();
+    } catch (ErrorResponseException e) {
+        if ("NoSuchKey".equals(e.errorResponse().code())) {
+            Log.warnf("PDF with key: %s not found in MinIO bucket: %s", objectKey, bucketName);
+            return Response.status(Response.Status.NOT_FOUND).build();
         }
-    });
+        Log.errorf(e, "Failed to download PDF with key: %s from MinIO bucket: %s", objectKey, bucketName);
+        return Response.serverError().entity(e.getMessage()).build();
+    } catch (Exception e) {
+        Log.errorf(e, "An unexpected error occurred while downloading PDF with key: %s", objectKey);
+        return Response.serverError().entity(e.getMessage()).build();
+    }
 }
 ```
 
-**Source Code 2**: Implementazione dell'endpoint REST per il download del PDF
+**Source Code 2**: Endpoint REST per il download del PDF — uso corretto di `@Blocking` per proteggere l'Event Loop
 
 
 
@@ -232,86 +266,121 @@ In sintesi, quando un client chiama `GET /api/pdf/status/{processId}`, questo me
 
 <div style="page-break-after: always; break-after: page;"></div>
 
-#### Nota sulla Gestione delle Connessioni SSE con SseBroadcaster
+#### SseBroadcaster con Redis Pub/Sub: architettura distribuita
 
-Nell'implementazione corrente, la gestione delle connessioni Server-Sent Events (SSE) è stata centralizzata nel componente `SseBroadcaster`. Questo servizio astrae la logica di creazione, memorizzazione e notifica dei flussi di eventi, semplificando il codice dell'endpoint `PdfResource`.
+L'implementazione attuale del `SseBroadcaster` utilizza **Redis Pub/Sub** come canale di notifica cross-instance, superando i limiti dell'approccio in-memory originale. Il componente si sottoscrive ai canali Redis all'avvio dell'applicazione e gestisce tre aspetti fondamentali:
 
-L'implementazione sottostante del `SseBroadcaster` si basa su un meccanismo **in-memory** (come una `ConcurrentMap`) locale alla singola istanza della JVM.
-
-Questo approccio, sebbene efficace per una singola istanza, presenta limiti significativi in un ambiente di produzione distribuito (es. cluster Kubernetes, più istanze dietro un load balancer):
-
-- **Stato Locale**: la mappa degli emitter risiede nella memoria di una singola istanza. Se l'applicazione viene scalata orizzontalmente, ogni istanza avrà il proprio `SseBroadcaster` con una mappa isolata e non condivisa.
-- **Problema di Routing**: un client potrebbe stabilire la connessione SSE con l'istanza A, ma l'evento di completamento del PDF potrebbe essere gestito dall'istanza B. L'istanza B non avrebbe alcun riferimento all'emitter del client (che si trova sull'istanza A) e non potrebbe inviare la notifica.
-- **Mancanza di Resilienza**: se l'istanza che detiene la connessione si riavvia o va in crash, tutte le connessioni attive e i relativi emitter vengono persi.
-
-Per superare questi limiti, il meccanismo di broadcast in-memory dovrebbe essere sostituito da un sistema di messaggistica **Publish/Subscribe esterno**, come Redis Pub/Sub, RabbitMQ o Apache Kafka.
-
-Il flusso modificato sarebbe:
-
-1. Quando un client si connette, il `SseBroadcaster` dell'istanza corrente crea l'emitter e sottoscrive un canale/topic univoco sul message broker (es. `pdf-status-channel:<processId>`).
-2. Quando un worker (su qualsiasi istanza) completa la generazione del PDF, pubblica un messaggio su quel canale specifico nel broker.
-3. Il broker distribuisce il messaggio a tutti i sottoscrittori. L'istanza che ha la connessione SSE attiva riceve il messaggio.
-4. A questo punto, il `SseBroadcaster` di quell'istanza riceve il messaggio dal broker e invia la notifica al client tramite l'emitter corretto.
-
-Questo pattern rende le istanze dell'applicazione stateless rispetto alla gestione delle sessioni SSE, permettendo di scalare orizzontalmente in modo affidabile.
-
-<div style="page-break-after: always; break-after: page;"></div>
-
-### Gestione della sottoscrizione e degli aggiornamenti di stato
-
-La responsabilità di ascoltare gli eventi dall'Event Bus e di inviare le notifiche SSE ai client è stata assegnata un componente dedicato: `SseBroadcaster`. Questo migliora la separazione delle responsabilità e rende il codice più pulito e facile da manutenere.
-
-Il `SseBroadcaster` si inizializza all'avvio dell'applicazione, sottoscrivendo i consumer per gli eventi di completamento e di errore.
+1. **Consegna cross-instance**: quando `PdfEventProcessor` pubblica un evento su Redis, **tutte** le istanze dell'applicazione lo ricevono. L'istanza che ha la connessione SSE attiva per quel `processId` consegna l'evento al client.
+2. **Pending-event buffer (fix race condition)**: se l'evento Redis arriva *prima* che il client SSE apra la connessione, il payload viene memorizzato in Redis con `SETEX pending:completed:{processId}` (TTL = 300 s). Quando `createStream()` viene invocato, `checkPendingEvents()` usa `GETDEL` (atomico, esattamente-una-consegna) per recuperare e consumare l'evento pendente.
+3. **Prevenzione resource leak**: il `BroadcastProcessor` locale viene rimosso dalla mappa in tre scenari: disconnessione del client SSE (callback `onCancellation`), consegna dell'evento, shutdown dell'applicazione (`@Observes ShutdownEvent`).
 
 ```java
 @ApplicationScoped
 public class SseBroadcaster {
 
-   // ... (campi e costruttore)
+    static final String PENDING_COMPLETED_PREFIX = "pending:completed:";
+    static final String PENDING_ERROR_PREFIX     = "pending:error:";
+    static final long   PENDING_EVENT_TTL_SECONDS = 300L;
 
-   void onStart(@Observes StartupEvent ev) {
-      Log.debug("SseBroadcaster is initializing...");
-      eventBus.<PdfGenerationCompleted>consumer(completedDestination)
-              .handler(this::handleCompletionEvent);
-      eventBus.<PdfGenerationError>consumer(errorsDestination)
-              .handler(this::handleErrorEvent);
-      Log.debug("SseBroadcaster initialized and listening for completion and error events.");
-   }
+    // Mappa locale — scope intenzionalmente limitato alla singola JVM.
+    // La consegna cross-instance è delegata a Redis Pub/Sub.
+    private final Map<String, BroadcastProcessor<OutboundSseEvent>> processors =
+            new ConcurrentHashMap<>();
 
-   private void handleCompletionEvent(Message<PdfGenerationCompleted> message) {
-      PdfGenerationCompleted event = message.body();
-      String processId = event.processId();
-      BroadcastProcessor<OutboundSseEvent> processor = processors.get(processId);
+    @Inject ReactiveRedisDataSource reactiveRedisDS;
+    @Inject ObjectMapper objectMapper;
+    @Inject Sse sse;
 
-      if (processor != null) {
-         OutboundSseEvent sseEvent = sse.newEventBuilder()
-                 .name("PDF_COMPLETED")
-                 .data(event)
-                 .mediaType(MediaType.APPLICATION_JSON_TYPE)
-                 .build();
-         processor.onNext(sseEvent);
-         processor.onComplete();
-         processors.remove(processId);
-      } else {
-         Log.warnf("No active SSE processor found for processId: %s", processId);
-      }
-   }
+    private ReactivePubSubCommands.ReactiveRedisSubscriber redisChannelSubscriber;
 
-   // ... (metodo handleErrorEvent e altri)
+    void onStart(@Observes StartupEvent ev) {
+        ReactivePubSubCommands<String> redisPubSub = reactiveRedisDS.pubsub(String.class);
+        redisPubSub.subscribe(
+                List.of(completedChannel, errorsChannel),
+                (channel, json) -> {
+                    if (channel.equals(completedChannel)) onCompletedMessage(json);
+                    else if (channel.equals(errorsChannel)) onErrorMessage(json);
+                })
+            .subscribe().with(
+                sub -> { this.redisChannelSubscriber = sub; },
+                err -> Log.errorf(err, "Failed to subscribe to Redis channels"));
+    }
+
+    void onShutdown(@Observes ShutdownEvent ev) {
+        processors.forEach((id, p) -> p.onComplete());
+        processors.clear();
+        if (redisChannelSubscriber != null) {
+            redisChannelSubscriber.unsubscribe().subscribe().with(v -> {}, err -> {});
+        }
+    }
+
+    public Multi<OutboundSseEvent> createStream(String processId) {
+        BroadcastProcessor<OutboundSseEvent> processor =
+                processors.computeIfAbsent(processId, id -> BroadcastProcessor.create());
+
+        // Controlla Redis per un evento arrivato prima dell'apertura dello stream SSE.
+        checkPendingEvents(processId);
+
+        return processor.onCancellation().invoke(() -> processors.remove(processId));
+    }
+
+    private void checkPendingEvents(String processId) {
+        ReactiveValueCommands<String, String> values = reactiveRedisDS.value(String.class);
+        // GETDEL: atomico — impedisce la doppia consegna in caso di chiamate concorrenti.
+        values.getdel(PENDING_COMPLETED_PREFIX + processId)
+            .subscribe().with(
+                json -> {
+                    if (json != null) onCompletedMessage(json);
+                    else values.getdel(PENDING_ERROR_PREFIX + processId)
+                            .subscribe().with(
+                                errJson -> { if (errJson != null) onErrorMessage(errJson); },
+                                err -> Log.error("Failed to check pending:error for: " + processId, err));
+                },
+                err -> Log.error("Failed to check pending:completed for: " + processId, err));
+    }
+
+    private void handleCompletionEvent(PdfGenerationCompleted event, String rawJson) {
+        BroadcastProcessor<OutboundSseEvent> processor = processors.get(event.processId());
+        if (processor != null) {
+            OutboundSseEvent sseEvent = sse.newEventBuilder()
+                    .name("PDF_COMPLETED").data(event)
+                    .mediaType(MediaType.APPLICATION_JSON_TYPE).build();
+            processor.onNext(sseEvent);
+            processor.onComplete();
+            processors.remove(event.processId());
+        } else {
+            // Nessun client SSE locale — buffer su Redis per connessioni in ritardo.
+            reactiveRedisDS.value(String.class)
+                .setex(PENDING_COMPLETED_PREFIX + event.processId(),
+                       PENDING_EVENT_TTL_SECONDS, rawJson)
+                .subscribe().with(v -> {}, err -> Log.errorf(err, "Failed to store pending event"));
+        }
+    }
+    // ... handleErrorEvent è analogo
 }
 ```
 
-**Source Code 4**: Gestione centralizzata degli eventi nel SseBroadcaster
+**Source Code 4**: `SseBroadcaster` con Redis Pub/Sub, pending-event buffer e cleanup lifecycle
 
-Ogni qualvolta viene ricevuto un evento di completamento della generazione del PDF, il metodo `handlePdfCompletedEvent` viene chiamato per inviare l'aggiornamento di stato al client tramite l'emitter associato all'ID del processo. Lo stesso vale per gli eventi di errore, gestiti dal metodo `handlePdfErrorEvent`.
+Come funziona il flusso completo:
 
-Come funziona:
+1. **Avvio** (`@Observes StartupEvent`): il `SseBroadcaster` si sottoscrive ai canali Redis `completedChannel` e `errorsChannel`.
+2. **Apertura stream SSE** (`createStream`): viene registrato un `BroadcastProcessor` locale e viene immediatamente verificato Redis per eventuali eventi pendenti (race-condition guard).
+3. **Ricezione evento Redis**: se esiste un processor locale per quel `processId`, l'evento viene consegnato al client SSE e il processor viene rimosso. In caso contrario l'evento viene memorizzato in Redis con TTL = 300 s.
+4. **Shutdown** (`@Observes ShutdownEvent`): tutti i processor attivi vengono completati e la sottoscrizione Redis viene annullata.
 
-1. Inizializzazione (`@Observes StartupEvent`): all'avvio dell'applicazione, Quarkus invoca il metodo `onStart`. Questo metodo registra i consumer per due destinazioni sull'Event Bus: una per gli eventi di successo (`completedDestination`) e una per gli errori (`errorsDestination`).
-2. Gestione Eventi:
-   - Quando il worker pubblica un evento `PdfGenerationCompleted`, il metodo `handleCompletionEvent` viene invocato.
-   - Quando il worker pubblica un evento `PdfGenerationError`, viene chiamato `handleErrorEvent`.
-3. Invio Notifica SSE: entrambi i metodi handler recuperano il `BroadcastProcessor` corretto dalla mappa `processors` usando il `processId`. Creano un evento SSE nominato (`PDF_COMPLETED` o `PDF_ERROR`), lo inviano al client (`processor.onNext(...)`) e infine chiudono il flusso (`processor.onComplete()`) e rimuovono il processore dalla mappa, poiché il processo è terminato.
+<div style="page-break-after: always; break-after: page;"></div>
+
+### Gestione della sottoscrizione e degli aggiornamenti di stato
+
+La responsabilità di sottoscrivere i canali Redis e di inviare le notifiche SSE ai client è stata assegnata al componente dedicato `SseBroadcaster`, descritto nel dettaglio nella sezione precedente. La struttura ad alto livello è la seguente:
+
+- All'avvio (`@Observes StartupEvent`) viene stabilita la sottoscrizione ai canali Redis.
+- `createStream(processId)` registra il `BroadcastProcessor` e verifica immediatamente Redis per eventi pendenti.
+- Gli handler `onCompletedMessage` / `onErrorMessage` deserializzano il payload JSON e delegano rispettivamente a `handleCompletionEvent` / `handleErrorEvent`.
+- Allo shutdown (`@Observes ShutdownEvent`) tutti i processor attivi vengono completati e la sottoscrizione Redis viene annullata.
+
+Questo design garantisce che le istanze dell'applicazione siano **stateless rispetto alle sessioni SSE**: la mappa `processors` è locale alla JVM, ma la consegna cross-instance è garantita da Redis.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -324,13 +393,14 @@ Vediamo quali sono le principali responsabilità del `PdfEventProcessor`:
 - **Ascolto delle Richieste**: si registra programmaticamente sull'event bus all'avvio dell'applicazione per consumare i messaggi di tipo `PdfGenerationRequest`.
 - **Esecuzione Asincrona**: utilizza un `CompletableFuture` e un `ScheduledExecutorService` dedicato per eseguire la logica bloccante (generazione PDF e upload su MinIO) al di fuori del thread di I/O, garantendo che l'event loop non venga mai bloccato.
 - **Generazione e Archiviazione Reale**: utilizza la libreria `fj-doc` per creare il documento PDF e il client MinIO per caricarlo nello storage a oggetti.
-- **Notifica del Risultato**: una volta che il task è completato (con successo o con errore), pubblica un evento (`PdfGenerationCompleted` o `PdfGenerationError`) sull'event bus, che verrà poi inoltrato al client corretto dal `SseBroadcaster`.
+- **Notifica del Risultato**: una volta che il task è completato (con successo o con errore), serializza il payload (`PdfGenerationCompleted` o `PdfGenerationError`) in JSON e lo pubblica **direttamente su Redis Pub/Sub** tramite il metodo `publishToRedis()`. Il `SseBroadcaster`, sottoscritto ai canali Redis su tutte le istanze, riceverà il messaggio e lo consegnerà al client SSE corretto.
 
 ### Analisi del codice
 
-Il processore viene inizializzato all'avvio dell'applicazione (`onStart`), dove imposta il consumer dell'event bus. Il metodo `handlePdfGenerationRequest` gestisce la richiesta in modo non bloccante, delegando il lavoro pesante a un `CompletableFuture`.
+Il processore viene inizializzato all'avvio dell'applicazione (`onStart`), dove imposta il consumer dell'event bus e inizializza il publisher Redis. Il metodo `handlePdfGenerationRequest` gestisce la richiesta in modo non bloccante, delegando il lavoro pesante a un `CompletableFuture`.
 
 ```java
+@Unremovable
 @ApplicationScoped
 public class PdfEventProcessor {
 
@@ -342,39 +412,58 @@ public class PdfEventProcessor {
 
         generatePdfAsync(request.processId())
             .thenAccept(objectKey -> {
-                // Notifica il completamento
-                PdfGenerationCompleted completionEvent = new PdfGenerationCompleted(request.processId(), objectKey);
-                eventBus.publish(completedDestination, completionEvent, ...);
+                String downloadUrl = String.format("/api/pdf/download/%s", request.processId());
+                PdfGenerationCompleted completionEvent =
+                        new PdfGenerationCompleted(request.processId(), downloadUrl);
+
+                Log.debugf("Attempting to send PDF completion notification for ID: %s", request.processId());
+                // Pubblica su Redis — tutte le istanze sottoscritte riceveranno il messaggio.
+                publishToRedis(completedDestination, completionEvent);
                 Log.debugf("PDF completion notification sent for ID: %s", request.processId());
             })
             .exceptionally(ex -> {
-                // Notifica l'errore
-                Log.errorf(ex, "Failed to process PDF generation for ID: %s", request.processId());
-                PdfGenerationError errorEvent = new PdfGenerationError(request.processId(), ex.getCause().getMessage());
-                eventBus.publish(errorsDestination, errorEvent, ...);
+                PdfGenerationError errorEvent = new PdfGenerationError(
+                        request.processId(), "Failed to process PDF generation: " + ex.getCause().getMessage());
+                publishToRedis(errorsDestination, errorEvent);
                 return null;
             });
     }
 
+    /**
+     * Serializza l'evento in JSON e lo pubblica sul canale Redis specificato.
+     * Il numero di subscriber che ricevono il messaggio viene loggato.
+     */
+    private void publishToRedis(String channel, Object event) {
+        try {
+            String json = objectMapper.writeValueAsString(event);
+            redisPublisher.publish(channel, json)
+                .subscribe().with(
+                    count -> Log.debugf("Published event to Redis channel '%s' (%d receivers)", channel, count),
+                    err -> Log.errorf(err, "Failed to publish event to Redis channel: '%s'", channel));
+        } catch (JsonProcessingException e) {
+            Log.errorf(e, "Failed to serialize event for Redis channel: '%s'", channel);
+        }
+    }
+
     private CompletableFuture<String> generatePdfAsync(String processId) {
-        // Simula un ritardo per scopi dimostrativi
         long delay = ThreadLocalRandom.current().nextLong(minDelayInSeconds, maxDelayInSeconds + 1);
+        Log.debugf("Scheduling PDF generation for process ID: %s with a delay of %d seconds", processId, delay);
 
         return CompletableFuture.supplyAsync(() -> {
             String objectKey = processId + ".pdf";
             try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                // 1. Genera il PDF usando fj-doc
-                docHelper.getDocProcessConfig().fullProcess(...);
+                DocProcessContext context = DocProcessContext.newContext("processId", processId);
+                docHelper.getDocProcessConfig().fullProcess("document", context, DocConfig.TYPE_PDF, baos);
 
-                // 2. Carica il PDF su MinIO
                 byte[] pdfBytes = baos.toByteArray();
                 minioClient.putObject(
                         PutObjectArgs.builder()
-                                .bucket(bucketName)
-                                .object(objectKey)
+                                .bucket(bucketName).object(objectKey)
                                 .stream(new ByteArrayInputStream(pdfBytes), pdfBytes.length, -1)
                                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                 .build());
+
+                Log.debugf("PDF successfully generated and uploaded to MinIO with key: %s", objectKey);
                 return objectKey;
             } catch (Exception e) {
                 throw new CompletionException(e);
@@ -383,7 +472,7 @@ public class PdfEventProcessor {
     }
 }
 ```
-**Source Code 5**: Logica del `PdfEventProcessor` per la generazione e l'upload del PDF
+**Source Code 5**: `PdfEventProcessor` — generazione PDF, upload MinIO e pubblicazione su Redis Pub/Sub
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -461,22 +550,58 @@ A seguire uno screenshot della pagina HTML in esecuzione, che mostra il flusso d
 Dai log della console dell'applicazione, possiamo vedere il flusso di esecuzione mostrato nel diagramma di sequenza. A seguire un esempio di log generato a fronte della richiesta di generazione del PDF eseguita dal client HTML.
 
 ```plaintext
-2025-06-23 11:30:10,100 DEBUG [i.d.q.s.e.w.r.PdfResource] (vert.x-eventloop-thread-1) Starting the PDF generation for ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:10,105 DEBUG [i.d.q.s.e.w.r.PdfResource] (vert.x-eventloop-thread-1) Request for PDF generation for ID a1b2c3d4-e5f6-7890-1234-567890abcdef sent to the event bus.
-2025-06-23 11:30:10,110 DEBUG [i.d.q.s.e.p.p.PdfEventProcessor] (vert.x-eventloop-thread-0) Received PDF generation request with ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:10,112 DEBUG [i.d.q.s.e.p.p.PdfEventProcessor] (vert.x-eventloop-thread-0) Scheduling PDF generation for process ID: a1b2c3d4-e5f6-7890-1234-567890abcdef with a delay of 25 seconds
-2025-06-23 11:30:10,115 DEBUG [i.d.q.s.e.w.r.PdfResource] (vert.x-eventloop-thread-2) The client requested status for ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:10,118 DEBUG [i.d.q.s.e.b.SseBroadcaster] (vert.x-eventloop-thread-2) SSE stream created for processId: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:35,500 DEBUG [i.d.q.s.e.p.p.PdfEventProcessor] (executor-thread-1) PDF successfully generated and uploaded to MinIO with key: a1b2c3d4-e5f6-7890-1234-567890abcdef.pdf
-2025-06-23 11:30:35,505 DEBUG [i.d.q.s.e.p.p.PdfEventProcessor] (executor-thread-1) Attempting to send PDF completion notification for ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:35,510 DEBUG [i.d.q.s.e.p.p.PdfEventProcessor] (executor-thread-1) PDF completion notification sent for ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:35,515 DEBUG [i.d.q.s.e.b.SseBroadcaster] (vert.x-eventloop-thread-3) Received PDF completion event for ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
-2025-06-23 11:30:35,520 DEBUG  [i.d.q.s.e.b.SseBroadcaster] (vert.x-eventloop-thread-3) Sent PDF_COMPLETED event for process ID: a1b2c3d4-e5f6-7890-1234-567890abcdef
+2025-06-23 11:30:10,100 DEBUG [PdfResource] (vert.x-eventloop-thread-1) Starting the PDF generation for ID: a1b2c3d4-…
+2025-06-23 11:30:10,105 DEBUG [PdfResource] (vert.x-eventloop-thread-1) Request sent to the event bus.
+2025-06-23 11:30:10,110 DEBUG [PdfEventProcessor] (vert.x-eventloop-thread-0) Received PDF generation request with ID: a1b2c3d4-…
+2025-06-23 11:30:10,112 DEBUG [PdfEventProcessor] (vert.x-eventloop-thread-0) Scheduling PDF generation with a delay of 25 seconds
+2025-06-23 11:30:10,115 DEBUG [PdfResource] (vert.x-eventloop-thread-2) The client requested status for ID: a1b2c3d4-…
+2025-06-23 11:30:10,118 DEBUG [SseBroadcaster] (vert.x-eventloop-thread-2) Creating SSE stream for processId: a1b2c3d4-…
+2025-06-23 11:30:35,500 DEBUG [PdfEventProcessor] (pool-5-thread-1) PDF successfully generated and uploaded to MinIO with key: a1b2c3d4-….pdf
+2025-06-23 11:30:35,505 DEBUG [PdfEventProcessor] (pool-5-thread-1) Attempting to send PDF completion notification for ID: a1b2c3d4-…
+2025-06-23 11:30:35,510 DEBUG [PdfEventProcessor] (pool-5-thread-1) PDF completion notification sent for ID: a1b2c3d4-…
+2025-06-23 11:30:35,512 DEBUG [PdfEventProcessor] (vert.x-eventloop-thread-1) Published event to Redis channel 'custom-pdf-completed-destination' (1 receivers)
+2025-06-23 11:30:35,515 DEBUG [SseBroadcaster] (vert.x-eventloop-thread-0) Sending PDF_COMPLETED event for processId: a1b2c3d4-…
+2025-06-23 11:30:35,520 DEBUG [SseBroadcaster] (vert.x-eventloop-thread-0) Removed SSE processor for processId: a1b2c3d4-…
 ```
 
-**Console 1**: Log generato durante la generazione del PDF
+**Console 1**: Log generato durante la generazione del PDF (singola istanza)
 
-Dal log è possibile notare l'uso dell'event loop di Vert.x (`vert.x-eventloop-thread-*`) per le operazioni non bloccanti (gestione richieste HTTP, eventi) e di un thread del pool dedicato (`executor-thread-1`) per l'esecuzione della generazione del PDF, che è un'operazione bloccante.
+Dal log è possibile notare l'uso dell'event loop di Vert.x (`vert.x-eventloop-thread-*`) per le operazioni non bloccanti (gestione richieste HTTP, eventi) e di un thread del pool dedicato (`pool-5-thread-1`) per l'esecuzione della generazione del PDF, che è un'operazione bloccante.
+
+<div style="page-break-after: always; break-after: page;"></div>
+
+## Flusso cross-instance: caso reale dai log
+
+Lo scenario più interessante si verifica quando Nginx (round-robin) instrada la richiesta `POST /api/pdf/generate` e la richiesta `GET /api/pdf/status/{processId}` su **istanze diverse**. A seguire un esempio reale di log prodotto con due istanze (`app-1` e `app-2`) in esecuzione dietro Nginx.
+
+```plaintext
+sse-poc-app-2 | 13:27:25,313 DEBUG [PdfResource] Starting the PDF generation for ID: 7f390554-…
+sse-poc-app-2 | 13:27:25,320 DEBUG [PdfResource] Request sent to the event bus.
+sse-poc-app-2 | 13:27:25,322 DEBUG [PdfEventProcessor] Received PDF generation request with ID: 7f390554-…
+sse-poc-app-2 | 13:27:25,322 DEBUG [PdfEventProcessor] Scheduling PDF generation with a delay of 5 seconds
+sse-poc-nginx | POST /api/pdf/generate 200 — upstream=10.89.0.9:8080  ← app-2
+
+sse-poc-app-1 | 13:27:25,338 DEBUG [PdfResource] The client requested status for ID: 7f390554-…
+sse-poc-app-1 | 13:27:25,339 DEBUG [SseBroadcaster] Creating SSE stream for processId: 7f390554-…
+                                                    ↑ istanza diversa dall'elaborazione!
+
+sse-poc-app-2 | 13:27:30,735 DEBUG [PdfEventProcessor] PDF successfully generated and uploaded to MinIO
+sse-poc-app-2 | 13:27:30,736 DEBUG [PdfEventProcessor] PDF completion notification sent for ID: 7f390554-…
+sse-poc-app-2 | 13:27:30,738 DEBUG [PdfEventProcessor] Published event to Redis channel 'custom-pdf-completed-destination'
+
+sse-poc-app-1 | 13:27:30,737 DEBUG [SseBroadcaster] Sending PDF_COMPLETED event for processId: 7f390554-…
+                                                    ↑ app-1 riceve da Redis e consegna al client ✅
+sse-poc-app-2 | 13:27:30,738 DEBUG [SseBroadcaster] No active SSE processor for processId: 7f390554-… — buffering completed event in Redis (TTL=300s)
+                                                    ↑ app-2 non ha il processor locale → buffer difensivo ⚠️
+sse-poc-app-1 | 13:27:30,749 DEBUG [SseBroadcaster] Removed SSE processor for processId: 7f390554-…
+sse-poc-nginx | GET /api/pdf/status/7f390554-… 200 — upstream=10.89.0.8:8080  ← app-1
+```
+
+**Console 1**: Log cross-instance — POST su app-2, SSE su app-1
+
+Il diagramma di sequenza PlantUML completo per questo scenario è disponibile in `src/docs/blog/article/resources/diagrams/cross-instance-async-flow.puml` e visualizzabile con [PlantUML Editor (online)](https://editor.plantuml.com/uml/vLdDRkF84RxpAMgrXx64aQmVUsmhSB1ZMPunnZ-Af0qIn4RG8fjIGrGtjvkqBEmFvf9S4sJt5EIGKvuXp-CNo2kagacAf6JFxbvs3zACCMEfgjXTNTzNNxM-C17JKRm8mDNAcBgG-8PqUPsPbNJhVg2Mpgkd7pxko5_d5VmkPdeU6nYD-Z1GFNZw-0FqR6ukqzp0MyeDNDZSeCV8vP9feRfmCnNo4VQqYgLNrseYP1NmbuWR6DoEni2a1-_wOnixKd1-UN7H7_Plnf2btJGm7YJ6-omK-w7dxq-vv9f57E3fh_y05eRrDi1UgzauFcaq6oVTu-PnishzA7RkXo6ZsEm_VVnFxjagU1vddkXxEp5SFt0F0ZM5I2muEYz2q4nEUHTQdMxxgDi-n6Hyd_xIQSBUb-CUFNUW5QxSmELv5uxypadpyF2W_iPbxVe1Pxm-yLpyd-jotkhuxCGxmYMmoKJp1u6RykpIChVgJXMR4uaeu3-lukxadgsEl1I-iOucqfmjydEkEewP2naoZUyQ_bNCCSvRhTLoF1FkNDA1jHg7pnYzmueDpvJsk2wOFcDu9NpyaJonxQb0QVZyqBwUiHuWpmXNX4n69OUEVVs80tFdKukgrEdYcFuKdAIAokjuQr-R5bjnwDLq7EP6-6logfnXaX0DcEbU8BYCgXLOlvY1dkDCr2DKBDZH20kPQyCXrEfn1VjmTOOEd_Vx5mSN5mv0c6yZzIc4AmM-SJZo0yPE7_02qYjssGVz_cRmWUSFkL6nTdbbA_XWsDwq_ptNKUCH-W-unxFOb7VPFzkon_ZMDiMxqfLY_FvWos5aEEQIUIupaSsdtH6bar6runFA6xwKlaPJ7RjHh3djiscFPoFijP2NjoybyNhJUiWzOGWryMH_54yAXudMmsTI_Wn5ldYUp-wmbU-mzJFFg9MlvnNywWJr2z7WwIdygNKFW_CBU9UqEg4a38a6J4I7aNQVHgVLgSBfwGwbnka1r7yBS8C5qdr15ZZ4RA35T1Q1yf558DKXgV90eL6hMUJLQlXPKPr072Pz0rlyXfoWEgJ0ZdEJB049vEKb87-A1v8eH3CEcQ9Buh5MBs526vVUdQpLieQFIqgjYN7GF8mdWJ0pGA3anP3M0k9h7UGqbmmsG9gbBkwrtMp2xOTQ3RxEdmdVEXulhvBsHLwzJtevj2oxVoGuDFHu893ldrrV8Gt4XjQ3yf1u6dV6lHZxFHNwTEsBcyAOR0MdS0Yckd6QrZVd-oqA9dQPundFE4JCpD44eSDWgVGS5ndDy70z29KA6kITU0avXQK8KFAhHHXmVDntcQPh5CvzTr161DI-jp9gbCYe8PyAH4R2H4K6wXplD0FHWB4vNvJ0_5EvgFLJk2WRKC1AOa_uFjTO_Ejf2Noj5hRsYPO-UuwpMYyiEbjoaRbQn5mjwqYj6prTN4_4avhOombdxMCxlBL5fzH7sz91y5t7GIJw2n5PPO0R39JBWenSb3QmO26YVyu9-tdqZNZ86kvyW5j3s5hictmbTvBqFcvvHfWMr3HHxC2AH-bMC4noS0c_OOKZmUr5_37QvnIhdgJyDJubbdFkLSiisLgpPAyS9HitLCYHp77g-3iicOXe5JwIaerjSF3SDHRf93AcGBGPUI2t7dKEaqf6deS0CwntZKkoZWZNL4rn6A1qfeGbACXl3ng8rAg3HhRsqlvPgwKErALthR0ExbDifsCCtAX8-C8jToXRP6-UFdv_j7jzQbrRGokLlpoxkXoznw9nOnEfHHqhgfxf7Q_keLeJqYQlLhkJ1ScN5-5hsAf9r8EVb6TNQjg5YenHMsdkSXAAE5OJv9F3ivUgW5qWc32Nn9hcEEbA0-Jo6q3cZR53f19pXVfC-a8lk8UMarLwVsVYYN6rc627sJESmuG7Qbaj2hSYXPCETOOfaDAEii2DiYdFbkXbOolW2jVHiHKKtDelkxN9ZGL6bNntgF88deViFZqUEcngaBPLmtbsb2M47kqQDZSaJQ3KF0wtb11fcLfj_Iug2HI7g2v8KMGeXAT__IKDjvxTADrMSNJlPF8lXi6kykVUxVNWgZ_kdnF6FHQnRd6uUmqB8ONwWF8hXNN0VOlg7k8jlGHCpd5aBsm0mSWDViQWKWfVMMF3Ffv6BLeJmbTornAqooI2SubW1JTGXdj5l6vaHyaUYTiWOAbhmXP9VZHVg0SEnIJboIaYtqhJ7QenYyB9VNedJYWyvpwN1k47Pp5D3ZXjC9TZ4q0fRJCxZPdsgcLexbpRjEIUa_mdeIbL_i4MBl_vx__zzsyRxT46pTjZSZQ4KGqpPUZB7nhUyda2RIWeZZCcnsa3u38Y165ic2EAq6evu-YfKyvb0LrphBB6YM55j06mWZGO8MJ_G4IJp5JTjIhevdCiIGABPGZPoehERm76uoiSr3eu0PcDVGxNtoH0eUmcjkow8FprDbtxXG9QpJ3apUsOHhMC9pWo4jb9dCuiwj4Cv-NI35gbwvstDtzSZy2K2nK77WKnyO8dkNiGZARUy_uLx35KFyAj4YcznzpOHoHRMpApdRgYrA1J9tEQKEs5aH6OgXNmnn2Pa0xKfq7NPWGDeXdcErk8BXx0i2GaQZLxpsO7NzHcUWVrmflIRLFFjeGI4HsSx1eHbIuQte_7W_rMevNSE52n52uTaWvQlPFPZT5f-SB8SRx0qeiNWUFy7m00]) o con il plugin PlantUML per IDE. 
+
+> **Nota sul buffer difensivo su app-2**: poiché entrambe le istanze sono sottoscritte allo stesso canale Redis, `app-2` riceve anch'essa l'evento ma non ha un processor attivo per quel `processId`. Esegue quindi il buffer su Redis come protezione contro la race condition. In questo caso specifico l'evento è già stato consegnato da `app-1`, quindi la chiave Redis scadrà dopo 300 s senza consumatori — comportamento corretto e atteso.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -484,7 +609,7 @@ Dal log è possibile notare l'uso dell'event loop di Vert.x (`vert.x-eventloop-t
 
 All'interno di questa PoC, è stata inclusa una collection di Postman nel file `src/main/postman/collection/postman_collection.json`. Questa collection permette di testare facilmente il flusso end-to-end.
 
-La collection contiene due richieste da eseguire in sequenza:
+La collection contiene tre richieste da eseguire in sequenza:
 
 1. **Generate PDF**
    - **Azione**: Esegue una richiesta `POST` all'endpoint `/api/pdf/generate`.
@@ -503,6 +628,16 @@ La collection contiene due richieste da eseguire in sequenza:
       
    - **Automazione**: Gli script di test associati verificano che la risposta contenga l'evento `PDF_COMPLETED` e che il payload JSON contenga un `pdfUrl` valido.
 
+3. **Download PDF**
+   - **Azione**: Esegue una richiesta `GET` all'endpoint `/api/pdf/download/{{processId}}`.
+   - **Scopo**: Effettua il download del PDF generato, utilizzando il `processId` salvato dalla prima richiesta. **Da eseguire esclusivamente dopo aver ricevuto l'evento `PDF_COMPLETED`** dalla richiesta SSE precedente.
+   - **Pre-request Script**: Prima di inviare la richiesta, uno script verifica che la variabile `processId` sia presente; in caso contrario interrompe l'esecuzione con un messaggio di errore esplicativo, evitando chiamate inutili al server.
+   - **Automazione**: Gli script di test associati verificano che:
+     - lo status code sia `200`;
+     - il `Content-Type` della risposta sia `application/octet-stream`;
+     - il corpo della risposta non sia vuoto.
+   - **Visualizzazione**: Il Postman Visualizer decodifica il PDF in Base64 e lo mostra inline in un `<iframe>` direttamente nel pannello di risposta.
+
 A seguire uno screenshot di Postman che mostra l'esecuzione della richiesta SSE e la ricezione dell'evento di completamento.
 
 ![Postman - Test SSE](resources/images/postman-collection-sse.png)
@@ -511,23 +646,106 @@ A seguire uno screenshot di Postman che mostra l'esecuzione della richiesta SSE 
 
 <div style="page-break-after: always; break-after: page;"></div>
 
+## Deploy con Podman Compose
+
+Per eseguire lo stack completo in un ambiente containerizzato, il progetto include un file `docker-compose.yml` in `src/main/docker/`, compatibile con **Podman Compose** (≥ 1.0) e con il comando built-in `podman compose` (Podman ≥ 4.7).
+
+Lo stack comprende sei servizi:
+
+| Servizio     | Immagine                              | Ruolo                                                 |
+|:-------------|:--------------------------------------|:------------------------------------------------------|
+| `redis`      | `redis:7-alpine`                      | Canale Pub/Sub cross-instance                         |
+| `minio`      | `minio/minio:latest`                  | Object storage per i PDF generati                     |
+| `minio-init` | `minio/mc:latest`                     | Init one-shot: crea il bucket `pdf-bucket`            |
+| `app-1`      | `quarkus/quarkus-sse-poc-jvm:latest`  | Istanza Quarkus 1                                     |
+| `app-2`      | `quarkus/quarkus-sse-poc-jvm:latest`  | Istanza Quarkus 2                                     |
+| `nginx`      | `nginx:1.27-alpine`                   | Reverse proxy / load balancer (entry point → :8080)   |
+
+La configurazione Nginx in `src/main/docker/nginx/nginx.conf` include le impostazioni specifiche per SSE:
+
+```nginx
+location /pdf/status {
+    proxy_pass         http://quarkus_app;
+    proxy_http_version 1.1;
+    proxy_set_header   Connection        '';   # keep-alive upstream
+    proxy_buffering             off;           # flush immediato degli eventi SSE
+    proxy_cache                 off;
+    proxy_read_timeout          3600s;         # mantieni lo stream aperto fino a 1 ora
+    add_header X-Accel-Buffering no;
+}
+```
+
+**Source Code 7**: Configurazione Nginx ottimizzata per SSE
+
+### Quick start con Podman
+
+```shell
+# 1. (Prima volta) Inizializza e avvia la Podman Machine
+podman machine init && podman machine start
+
+# 2. Build del JAR
+./mvnw package -DskipTests
+
+# 3. Build dell'immagine container
+podman build -f src/main/docker/Dockerfile.jvm \
+             -t quarkus/quarkus-sse-poc-jvm:latest .
+
+# 4. Avvio dello stack completo
+podman compose -f src/main/docker/docker-compose.yml up -d
+
+# Applicazione  → http://localhost:8080
+# MinIO console → http://localhost:8080/minio-console/
+# MinIO API     → http://localhost:9000
+```
+
+> **Nota rootless Podman**: La porta Nginx di default è `8080` (configurabile in `src/main/docker/.env`) perché i container rootless non possono bindare porte < 1024. Modificare `NGINX_HTTP_PORT=80` solo quando si esegue come root o si configura `net.ipv4.ip_unprivileged_port_start ≤ 80`.
+
+<div style="page-break-after: always; break-after: page;"></div>
+
 ## Conclusioni
 
-Questa Proof of Concept (PoC) dimostra in modo efficace come implementare un sistema robusto e scalabile per la gestione di task asincroni in un'applicazione Quarkus. Sfruttando i Server-Sent Events (SSE), l'Event Bus di Vert.x e la programmazione asincrona, abbiamo costruito un flusso completo che notifica un client in tempo reale senza ricorrere a polling inefficiente o alla complessità dei WebSocket.
+Questa Proof of Concept (PoC) dimostra in modo efficace come implementare un sistema robusto e **scalabile orizzontalmente** per la gestione di task asincroni in un'applicazione Quarkus. Sfruttando i Server-Sent Events (SSE), **Redis Pub/Sub**, l'Event Bus di Vert.x e la programmazione asincrona, abbiamo costruito un flusso distribuito completo che notifica un client in tempo reale indipendentemente dall'istanza che ha processato la richiesta.
 
 L'architettura presentata si basa su una chiara **separazione delle responsabilità**:
 
 - **`PdfResource`**: gestisce l'esposizione degli endpoint REST e SSE, agendo come punto di ingresso.
-- **`SseBroadcaster`**: centralizza la gestione delle connessioni SSE, disaccoppiando la logica di notifica dagli endpoint.
-- **`PdfEventProcessor`**: orchestra il lavoro pesante in background, eseguendo la generazione del PDF e l'upload su MinIO in modo completamente asincrono tramite `CompletableFuture` su un pool di thread dedicato.
+- **`SseBroadcaster`**: si sottoscrive ai canali Redis all'avvio; consegna gli eventi SSE ai client connessi localmente; implementa il **pending-event buffer** (Redis `SETEX`/`GETDEL`, TTL = 300 s) per risolvere la race condition in cui Redis pubblica prima che il client SSE apra la connessione.
+- **`PdfEventProcessor`**: orchestra il lavoro pesante in background, eseguendo la generazione del PDF con `fj-doc` e l'upload su MinIO in modo completamente asincrono tramite `CompletableFuture` su un pool di thread dedicato; pubblica l'esito su Redis Pub/Sub.
 
-A differenza di una semplice simulazione, la PoC integra tecnologie reali come **fj-doc** per la generazione di documenti e **MinIO** per lo storage a oggetti, mostrando un caso d'uso realistico e pronto per essere adattato a contesti di produzione.
+Le evoluzioni rispetto alla versione originale sono:
 
-Il modello implementato, che prevede eventi nominati (`PDF_COMPLETED`, `PDF_ERROR`) con payload JSON, è flessibile e può essere facilmente esteso per comunicare stati intermedi (es. `GENERATION_STARTED`, `UPLOADING_TO_STORAGE`) o informazioni più dettagliate sul progresso.
+| Aspetto                                        | Versione iniziale                     | Versione attuale                                 |
+|:-----------------------------------------------|:--------------------------------------|:-------------------------------------------------|
+| Notifiche                                      | Vert.x EventBus in-memory (intra-JVM) | Redis Pub/Sub (cross-instance)                   |
+| Scaling orizzontale                            | ❌ Non supportato                      | ✅ Nessuna sticky session necessaria              |
+| Race condition (evento prima dello stream SSE) | ❌ Evento perso                        | ✅ Pending-event buffer su Redis                  |
+| Resource leak (client disconnect)              | ⚠️ Rischio                            | ✅ Cleanup via `onCancellation` + `ShutdownEvent` |
+| Deploy multi-istanza                           | Manuale                               | ✅ Podman Compose (6 servizi)                     |
 
-Tuttavia, come discusso, l'attuale `SseBroadcaster` basato su una mappa in-memory rappresenta un limite per lo scaling orizzontale. Per un ambiente di produzione distribuito, il passo successivo sarebbe sostituire questo meccanismo con un sistema di messaggistica esterno (come Redis Pub/Sub, RabbitMQ o Kafka) per garantire che le notifiche raggiungano i client corretti, indipendentemente dall'istanza dell'applicazione che gestisce la connessione.
+Il modello implementato è flessibile e può essere facilmente esteso per comunicare stati intermedi (es. `GENERATION_STARTED`, `UPLOADING_TO_STORAGE`) o scalato ulteriormente aggiungendo nuove istanze senza alcuna modifica al codice — è sufficiente aggiornare il file `docker-compose.yml`.
 
-In sintesi, la combinazione delle funzionalità reattive di Quarkus con i pattern di concorrenza di Java offre un toolkit potente per costruire applicazioni moderne, resilienti e performanti, in grado di offrire un'eccellente esperienza utente.
+In sintesi, la combinazione delle funzionalità reattive di Quarkus con Redis Pub/Sub e i pattern di concorrenza di Java offre un toolkit potente per costruire applicazioni moderne, resilienti e performanti, in grado di offrire un'eccellente esperienza utente anche in scenari di produzione distribuiti.
+
+### Perché Redis Pub/Sub e non Kafka (o RabbitMQ)?
+
+Nella fase di design è stato valutato anche l'uso di **Apache Kafka**, spesso citato come soluzione di riferimento per la messaggistica distribuita. La scelta è ricaduta su Redis Pub/Sub per ragioni precise legate alla natura del caso d'uso.
+
+| Criterio | Redis Pub/Sub | Apache Kafka |
+|:---------|:--------------|:-------------|
+| **Modello di consegna** | Fan-out: **tutti** i subscriber ricevono ogni messaggio | Consumer group: **un solo** consumer per gruppo riceve ogni messaggio |
+| **Persistenza** | Nessuna (fire-and-forget); buffer temporaneo via `SETEX` (TTL) | Log persistente su disco, retention configurabile |
+| **Latenza** | Sub-millisecondo | Decine di millisecondi (batching + fsync) |
+| **Complessità operativa** | Singolo processo, zero configurazione aggiuntiva | Broker, topic, partizioni, offset, consumer group, KRaft/ZooKeeper |
+| **Quarkus Dev Services** | Container Redis avviato automaticamente con una dipendenza | Container Kafka disponibile, ma più pesante in dev |
+| **Message replay** | Non supportato | Supportato (rilettura da offset) |
+
+Il punto più rilevante è il **modello di consegna**. In questo caso d'uso occorre che il messaggio di completamento del PDF arrivi a **tutte** le istanze dell'applicazione, perché non è possibile sapere a priori quale istanza ospita la connessione SSE del client. Redis Pub/Sub realizza esattamente questo pattern (fan-out), mentre Kafka con i consumer group fa esattamente l'opposto: garantisce che **un solo** consumer per gruppo elabori ogni messaggio — il che sarebbe corretto per elaborazioni idempotenti, ma sbagliato per la notifica SSE distribuita.
+
+La **persistenza** di Kafka, altro suo punto di forza, è in questo contesto superflua: le notifiche SSE sono eventi transitori. Il meccanismo di pending-event buffer su Redis (chiave con TTL = 300 s) è sufficiente per gestire l'unico scenario di "evento in ritardo" rilevante — quello in cui il PDF viene completato prima che il client apra lo stream SSE.
+
+Infine, la **complessità operativa** di Kafka avrebbe appesantito significativamente lo stack di sviluppo e il file `docker-compose.yml` senza portare benefici concreti per questo carico di lavoro. Redis è già largamente utilizzato come cache in molte architetture applicative: aggiungere Pub/Sub riutilizza l'infrastruttura esistente.
+
+> **Quando scegliere Kafka invece di Redis Pub/Sub**: se il requisito fosse la **re-processabilità** degli eventi (es. audit log, event sourcing, replay storico), la **garanzia di consegna at-least-once con durabilità** su cluster multi-nodo, o throughput nell'ordine di milioni di messaggi al secondo, Kafka sarebbe la scelta corretta. Per notifiche SSE leggere e a bassa latenza, Redis è la soluzione più adatta.
 
 <div style="page-break-after: always; break-after: page;"></div>
 
@@ -568,5 +786,10 @@ All'interno di questa PoC, `fj-doc` è integrato nel `PdfEventProcessor`. Il met
 - [Server-Sent Events - MDN Web Docs](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
 - [Quarkus Event Bus Guide](https://quarkus.io/guides/reactive-event-bus)
 - [Quarkus SSE Guide](https://quarkus.io/guides/rest#server-sent-event-sse-support)
+- [Quarkus Redis Client Guide](https://quarkus.io/guides/redis)
+- [Quarkus Dev Services — Redis](https://quarkus.io/guides/redis-dev-services)
+- [Redis Pub/Sub Documentation](https://redis.io/docs/latest/develop/interact/pubsub/)
+- [Podman Documentation](https://docs.podman.io/)
+- [Podman Compose](https://github.com/containers/podman-compose)
 - [Quarkus Event Bus - Come sfruttarlo al massimo: utilizzi e vantaggi](https://bit.ly/3VTG2dt)
 - [Quarkus Event Bus Logging Filter JAX-RS](https://github.com/amusarra/eventbus-logging-filter-jaxrs)

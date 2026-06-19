@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>it.dontesta.quarkus.sse</groupId>
     <artifactId>quarkus-sse-poc</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.3.0-SNAPSHOT</version>
     <description>A PoC demonstrating the use of Server-Sent Event (SSE) through the implementation of a possible
-        real-world use case.
-    </description>
+        real-world use case.</description>
     <inceptionYear>2025</inceptionYear>
     <organization>
         <name>Antonio Musarra's Blog</name>
@@ -85,6 +83,10 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-redis-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
         <dependency>
@@ -99,6 +101,10 @@
             <groupId>io.quarkiverse.minio</groupId>
             <artifactId>quarkus-minio</artifactId>
             <version>3.8.6</version>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -123,14 +129,32 @@
         <dependency>
             <groupId>org.fugerit.java</groupId>
             <artifactId>fj-doc-base</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>xml-apis</groupId>
+                    <artifactId>xml-apis</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.fugerit.java</groupId>
             <artifactId>fj-doc-freemarker</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>xml-apis</groupId>
+                    <artifactId>xml-apis</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.fugerit.java</groupId>
             <artifactId>fj-doc-mod-fop</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>xml-apis</groupId>
+                    <artifactId>xml-apis</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -187,8 +211,7 @@
                 </executions>
                 <configuration>
                     <systemPropertyVariables>
-                        <native.image.path>${project.build.directory}/${project.build.finalName}-runner
-                        </native.image.path>
+                        <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
@@ -228,8 +251,7 @@
                             <templateBasePath>${project.basedir}/src/main/resources/fj-doc/template</templateBasePath>
                             <generateReport>true</generateReport>
                             <failOnErrors>true</failOnErrors>
-                            <reportOutputFolder>${project.build.directory}/freemarker-syntax-verify-report
-                            </reportOutputFolder>
+                            <reportOutputFolder>${project.build.directory}/freemarker-syntax-verify-report</reportOutputFolder>
                         </configuration>
                     </execution>
                 </executions>

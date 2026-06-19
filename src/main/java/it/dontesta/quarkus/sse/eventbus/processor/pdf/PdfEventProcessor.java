@@ -191,9 +191,11 @@ public class PdfEventProcessor {
     private void publishToRedis(String channel, Object event) {
         try {
             String json = objectMapper.writeValueAsString(event);
+            // ReactivePubSubCommands.publish() returns Uni<Void>: the Redis subscriber
+            // count is discarded by the Quarkus API, so it cannot be logged here.
             redisPublisher.publish(channel, json)
                     .subscribe().with(
-                            count -> Log.debugf("Published event to Redis channel '%s' (%d receivers)", channel, count),
+                            v -> Log.debugf("Published event to Redis channel '%s'", channel),
                             err -> Log.errorf(err, "Failed to publish event to Redis channel: '%s'", channel));
         } catch (JsonProcessingException e) {
             Log.errorf(e, "Failed to serialize event for Redis channel: '%s'", channel);

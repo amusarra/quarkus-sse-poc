@@ -1,125 +1,216 @@
 {
-	"info": {
-		"_postman_id": "538d78b6-1df8-461d-9a72-94b8ccbeb7d3",
-		"name": "Quarkus Server-Sent Event (SSE) Proof of Concept (PoC)",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "17282"
-	},
-	"item": [
-		{
-			"name": "1. Generate PDF",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"// Estrae il processId dal corpo della risposta (che è testo semplice)",
-							"const processId = pm.response.text();",
-							"",
-							"// Imposta il processId come variabile di collezione per usarlo nella prossima richiesta",
-							"pm.collectionVariables.set(\"processId\", processId);",
-							"console.log(`Process ID salvato: ${processId}`);",
-							"",
-							"// Test per verificare che la risposta sia un UUID valido",
-							"pm.test(\"Response should be a valid UUID\", function () {",
-							"    const responseText = pm.response.text();",
-							"    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;",
-							"    pm.expect(responseText).to.match(uuidRegex, \"The process ID is not a valid UUID\");",
-							"});"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [],
-				"url": {
-					"raw": "{{baseUrl}}/api/pdf/generate",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"pdf",
-						"generate"
-					]
-				},
-				"description": "Avvia il processo di generazione del PDF e restituisce un ID di processo."
-			},
-			"response": []
-		},
-		{
-			"name": "2. Get PDF Status (SSE)",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"// I test per le richieste SSE vengono eseguiti dopo la chiusura della connessione.",
-							"pm.test(\"Should receive PDF_COMPLETED event\", function () {",
-							"    const responseBody = pm.response.text();",
-							"    // Verifica che il nome dell'evento sia presente",
-							"    pm.expect(responseBody).to.include(\"event:PDF_COMPLETED\", \"Response should contain the PDF_COMPLETED event name\");",
-							"});",
-							"",
-							"pm.test(\"The event data should be a valid JSON with correct details\", function () {",
-							"    const responseBody = pm.response.text();",
-							"    const expectedProcessId = pm.collectionVariables.get(\"processId\");",
-							"",
-							"    // Estrae la riga 'data:' che contiene il JSON",
-							"    const dataLine = responseBody.split('\\n').find(line => line.startsWith(\"data:\"));",
-							"    pm.expect(dataLine, \"Could not find data line in SSE response\").to.not.be.undefined;",
-							"",
-							"    // Estrae e fa il parsing del JSON",
-							"    try {",
-							"        const jsonData = dataLine.substring(\"data: \".length);",
-							"        const eventData = JSON.parse(jsonData);",
-							"",
-							"        // Verifica il contenuto del JSON",
-							"        pm.expect(eventData).to.have.property('processId', expectedProcessId);",
-							"        pm.expect(eventData).to.have.property('downloadUrl', `/api/pdf/download/${expectedProcessId}`);",
-							"        console.log(`Received event data: ${JSON.stringify(eventData)}`);",
-							"",
-							"    } catch (e) {",
-							"        pm.expect.fail(\"Failed to parse JSON from SSE data: \" + e.message);",
-							"    }",
-							"});"
-						],
-						"type": "text/javascript",
-						"packages": {}
-					}
-				}
-			],
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{baseUrl}}/api/pdf/status/{{processId}}",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"pdf",
-						"status",
-						"{{processId}}"
-					]
-				},
-				"description": "Si connette all'endpoint SSE per ricevere lo stato della generazione del PDF. Utilizza il `processId` ottenuto dalla richiesta precedente."
-			},
-			"response": []
-		}
-	],
-	"variable": [
-		{
-			"key": "baseUrl",
-			"value": "http://localhost:8080"
-		},
-		{
-			"key": "processId",
-			"value": "",
-			"type": "string"
-		}
-	]
+  "info": {
+    "_postman_id": "538d78b6-1df8-461d-9a72-94b8ccbeb7d3",
+    "name": "Quarkus Server-Sent Event (SSE) Proof of Concept (PoC)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "17282"
+  },
+  "item": [
+    {
+      "name": "1. Generate PDF",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Estrae il processId dal corpo della risposta (che è testo semplice)",
+              "const processId = pm.response.text();",
+              "",
+              "// Imposta il processId come variabile di collezione per usarlo nella prossima richiesta",
+              "pm.collectionVariables.set(\"processId\", processId);",
+              "console.log(`Process ID salvato: ${processId}`);",
+              "",
+              "// Test per verificare che la risposta sia un UUID valido",
+              "pm.test(\"Response should be a valid UUID\", function () {",
+              "    const responseText = pm.response.text();",
+              "    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;",
+              "    pm.expect(responseText).to.match(uuidRegex, \"The process ID is not a valid UUID\");",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/pdf/generate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pdf",
+            "generate"
+          ]
+        },
+        "description": "Avvia il processo di generazione del PDF e restituisce un ID di processo."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Get PDF Status (SSE)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// I test per le richieste SSE vengono eseguiti dopo la chiusura della connessione.",
+              "pm.test(\"Should receive PDF_COMPLETED event\", function () {",
+              "    const responseBody = pm.response.text();",
+              "    // Verifica che il nome dell'evento sia presente",
+              "    pm.expect(responseBody).to.include(\"event:PDF_COMPLETED\", \"Response should contain the PDF_COMPLETED event name\");",
+              "});",
+              "",
+              "pm.test(\"The event data should be a valid JSON with correct details\", function () {",
+              "    const responseBody = pm.response.text();",
+              "    const expectedProcessId = pm.collectionVariables.get(\"processId\");",
+              "",
+              "    // Estrae la riga 'data:' che contiene il JSON",
+              "    const dataLine = responseBody.split('\\n').find(line => line.startsWith(\"data:\"));",
+              "    pm.expect(dataLine, \"Could not find data line in SSE response\").to.not.be.undefined;",
+              "",
+              "    // Estrae e fa il parsing del JSON",
+              "    try {",
+              "        const jsonData = dataLine.substring(\"data:\".length);",
+              "        const eventData = JSON.parse(jsonData);",
+              "",
+              "        // Verifica il contenuto del JSON",
+              "        pm.expect(eventData).to.have.property('processId', expectedProcessId);",
+              "        pm.expect(eventData).to.have.property('pdfUrl', `/api/pdf/download/${expectedProcessId}`);",
+              "        console.log(`Received event data: ${JSON.stringify(eventData)}`);",
+              "",
+              "    } catch (e) {",
+              "        pm.expect.fail(\"Failed to parse JSON from SSE data: \" + e.message);",
+              "    }",
+              "});"
+            ],
+            "type": "text/javascript",
+            "packages": {}
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/pdf/status/{{processId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pdf",
+            "status",
+            "{{processId}}"
+          ]
+        },
+        "description": "Si connette all'endpoint SSE per ricevere lo stato della generazione del PDF. Utilizza il `processId` ottenuto dalla richiesta precedente."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Download PDF",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Response Content-Type is application/pdf\", function () {",
+              "    pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/octet-stream\");",
+              "});",
+              "",
+              "pm.test(\"Response body is not empty\", function () {",
+              "    pm.expect(pm.response.text().length).to.be.greaterThan(0);",
+              "});",
+              "",
+              "// Visualization: Render PDF inline",
+              "const response = pm.response.stream;",
+              "const bytes = new Uint8Array(response);",
+              "let binary = '';",
+              "for (let i = 0; i < bytes.byteLength; i++) {",
+              "    binary += String.fromCharCode(bytes[i]);",
+              "}",
+              "const base64 = btoa(binary);",
+              "",
+              "const template = `",
+              "<!DOCTYPE html>",
+              "<html>",
+              "<head>",
+              "  <style>",
+              "    body { margin: 0; padding: 0; background: #f0f0f0; }",
+              "    iframe { width: 100%; height: 100vh; border: none; }",
+              "  </style>",
+              "</head>",
+              "<body>",
+              "  <iframe src=\"data:application/pdf;base64,${base64}\"></iframe>",
+              "</body>",
+              "</html>",
+              "`;",
+              "",
+              "pm.visualizer.set(template);"
+            ],
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {}
+          }
+        },
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "// Verifica che processId sia stato impostato dalla chiamata precedente",
+              "const processId = pm.variables.get(\"processId\") || pm.environment.get(\"processId\") || pm.collectionVariables.get(\"processId\");",
+              "",
+              "if (!processId) {",
+              "    throw new Error(",
+              "        \"❌ processId non è stato impostato. \" +",
+              "        \"Esegui prima '1. Generate PDF' e poi '2. Get PDF Status (SSE)' \" +",
+              "        \"e attendi l'evento PDF_COMPLETED prima di eseguire questa richiesta.\"",
+              "    );",
+              "}",
+              "",
+              "console.log(\"✅ processId trovato: \" + processId + \" — procedo con il download del PDF.\");"
+            ],
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {}
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/pdf/download/{{processId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pdf",
+            "download",
+            "{{processId}}"
+          ]
+        },
+        "description": "Effettua il download del PDF generato utilizzando il `processId` ottenuto dalla richiesta precedente. Da eseguire dopo aver ricevuto l'evento `PDF_COMPLETED` dalla richiesta SSE."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "processId",
+      "value": ""
+    }
+  ]
 }

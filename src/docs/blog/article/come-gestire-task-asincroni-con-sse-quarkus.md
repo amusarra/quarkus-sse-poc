@@ -609,7 +609,7 @@ Il diagramma di sequenza PlantUML completo per questo scenario è disponibile in
 
 All'interno di questa PoC, è stata inclusa una collection di Postman nel file `src/main/postman/collection/postman_collection.json`. Questa collection permette di testare facilmente il flusso end-to-end.
 
-La collection contiene due richieste da eseguire in sequenza:
+La collection contiene tre richieste da eseguire in sequenza:
 
 1. **Generate PDF**
    - **Azione**: Esegue una richiesta `POST` all'endpoint `/api/pdf/generate`.
@@ -627,6 +627,16 @@ La collection contiene due richieste da eseguire in sequenza:
       ```
       
    - **Automazione**: Gli script di test associati verificano che la risposta contenga l'evento `PDF_COMPLETED` e che il payload JSON contenga un `pdfUrl` valido.
+
+3. **Download PDF**
+   - **Azione**: Esegue una richiesta `GET` all'endpoint `/api/pdf/download/{{processId}}`.
+   - **Scopo**: Effettua il download del PDF generato, utilizzando il `processId` salvato dalla prima richiesta. **Da eseguire esclusivamente dopo aver ricevuto l'evento `PDF_COMPLETED`** dalla richiesta SSE precedente.
+   - **Pre-request Script**: Prima di inviare la richiesta, uno script verifica che la variabile `processId` sia presente; in caso contrario interrompe l'esecuzione con un messaggio di errore esplicativo, evitando chiamate inutili al server.
+   - **Automazione**: Gli script di test associati verificano che:
+     - lo status code sia `200`;
+     - il `Content-Type` della risposta sia `application/octet-stream`;
+     - il corpo della risposta non sia vuoto.
+   - **Visualizzazione**: Il Postman Visualizer decodifica il PDF in Base64 e lo mostra inline in un `<iframe>` direttamente nel pannello di risposta.
 
 A seguire uno screenshot di Postman che mostra l'esecuzione della richiesta SSE e la ricezione dell'evento di completamento.
 

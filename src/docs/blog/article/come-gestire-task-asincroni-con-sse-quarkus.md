@@ -393,7 +393,7 @@ Vediamo quali sono le principali responsabilità del `PdfEventProcessor`:
 - **Ascolto delle Richieste**: si registra programmaticamente sull'event bus all'avvio dell'applicazione per consumare i messaggi di tipo `PdfGenerationRequest`.
 - **Esecuzione Asincrona**: utilizza un `CompletableFuture` e un `ScheduledExecutorService` dedicato per eseguire la logica bloccante (generazione PDF e upload su MinIO) al di fuori del thread di I/O, garantendo che l'event loop non venga mai bloccato.
 - **Generazione e Archiviazione Reale**: utilizza la libreria `fj-doc` per creare il documento PDF e il client MinIO per caricarlo nello storage a oggetti.
-- **Notifica del Risultato**: una volta che il task è completato (con successo o con errore), pubblica un evento (`PdfGenerationCompleted` o `PdfGenerationError`) sull'event bus, che verrà poi inoltrato al client corretto dal `SseBroadcaster`.
+- **Notifica del Risultato**: una volta che il task è completato (con successo o con errore), serializza il payload (`PdfGenerationCompleted` o `PdfGenerationError`) in JSON e lo pubblica **direttamente su Redis Pub/Sub** tramite il metodo `publishToRedis()`. Il `SseBroadcaster`, sottoscritto ai canali Redis su tutte le istanze, riceverà il messaggio e lo consegnerà al client SSE corretto.
 
 ### Analisi del codice
 

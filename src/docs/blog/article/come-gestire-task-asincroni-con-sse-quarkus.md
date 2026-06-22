@@ -6,13 +6,13 @@ create-date: "2025-06-21"
 categories: ["Web Application"]
 tags: ["Web Application", "Quarkus", "SSE", "MinIO", "fj-doc", "Redis", "Podman"]
 image: ""
-date: "2026-06-12"
+date: "2026-06-22"
 status: "published"
 layout: "article"
 slug: "gestire-task-asincroni-con-sse-e-quarkus"
 permalink: ""
 lang: "it"
-version: "v1.3.1"
+version: "v1.3.3"
 scope: "Public"
 state: Release
 ---
@@ -26,6 +26,8 @@ state: Release
 | 1.2.0    | 2025-06-23 | Antonio Musarra | Aggiornamento per riflettere l'uso di MinIO, fj-doc e il nuovo formato degli eventi SSE                                                                                            |
 | 1.3.0    | 2026-06-11 | Antonio Musarra | Evoluzione verso architettura distribuita: Redis Pub/Sub, pending-event buffer, fix race condition, resource leak, deploy Podman Compose                                           |
 | 1.3.1    | 2026-06-12 | Antonio Musarra | Correzione: `downloadPdf` usava `Uni.createFrom().item()` in modo errato; sostituito con `@Blocking` per proteggere l'Event Loop. <br/>Aggiunta tabella comparativa Redis vs Kafka |
+| 1.3.2    | 2026-06-22 | Antonio Musarra | Aggiunta sezione "Dimensionamento della Podman Machine" nel capitolo deploy con stime per servizio, tabella minimo/consigliato e comandi `podman machine init`/`set` |
+| 1.3.3    | 2026-06-22 | Antonio Musarra | Correzione dimensioni immagini OCI con valori reali misurati su arm64 (Podman 5.8.2): minio 167.87 MB, mc 82.92 MB, Quarkus JVM 490.6 MB, totale ~833 MB; aggiornata tabella consigliata CPU 4–5 vCPU; aggiunta nota di riferimento macchina di sviluppo |
 
 [TOC]
 
@@ -677,11 +679,81 @@ location /pdf/status {
 
 **Source Code 7**: Configurazione Nginx ottimizzata per SSE
 
+### Dimensionamento della Podman Machine (ambiente di sviluppo)
+
+Su **macOS** e **Windows**, Podman esegue i container all'interno di una macchina virtuale Linux gestita dal comando `podman machine`. Le risorse assegnate alla VM determinano le prestazioni dell'intero stack: se la macchina è sottodimensionata, i container Quarkus impiegheranno molto più tempo per avviarsi e la generazione del PDF sarà lenta o potrebbe andare in timeout.
+
+La tabella seguente riporta le dimensioni reali delle immagini OCI e le stime delle risorse a runtime per ogni servizio in **modalità JVM**, misurate su un host **macOS arm64 (Apple Silicon)** con Podman 5.8.2. Le dimensioni su architettura amd64 possono differire leggermente.
+
+| Servizio      |            Immagine OCI (arm64) | CPU stimata | RAM a regime  | Note                                                  |
+|:--------------|--------------------------------:|:-----------:|:-------------:|:------------------------------------------------------|
+| `redis`       |                        40.31 MB | ≤ 0.1 core  |    ~30 MB     | Molto leggero in assenza di dataset persistenti       |
+| `minio`       |                       167.87 MB |   0.1–0.2   |    ~256 MB    | RAM cresce con il numero di oggetti/bucket            |
+| `minio-init`  |                        82.92 MB |    ≤ 0.1    |    ~50 MB     | One-shot: termina subito dopo la creazione del bucket |
+| `app-1` (JVM) |                        490.6 MB |   0.5–1.0   |  ~350–512 MB  | JVM con heap di default; startup ~3–5 s               |
+| `app-2` (JVM) |          —  *(stessa immagine)* |   0.5–1.0   |  ~350–512 MB  | L'immagine su disco è condivisa con `app-1`           |
+| `nginx`       |                        51.13 MB |    ≤ 0.1    |    ~20 MB     | Alpine, praticamente trascurabile                     |
+| **Totale**    | **~833 MB** *(immagini uniche)* | **~2 core** | **~1–1.5 GB** | Picco di avvio contemporaneo ~2 GB                    |
+
+Considerando il picco di avvio contemporaneo di tutti i servizi e il normale overhead del sistema operativo ospitato nella VM, le **risorse minime e consigliate** per la Podman Machine sono:
+
+| Parametro   | Minimo (funziona, ma lento) | Consigliato (sviluppo confortevole) |
+|:------------|:---------------------------:|:-----------------------------------:|
+| **CPU**     | 2 vCPU                      | 4–5 vCPU                            |
+| **RAM**     | 4 GB                        | 6–8 GB                              |
+| **Disco**   | 20 GB                       | 40 GB                               |
+
+> **Perché 40 GB di disco?** Le immagini OCI uniche occupano ~833 MB (misurati su arm64).
+> I volumi Podman per MinIO (`minio-data`) e Redis (`redis-data`) crescono nel tempo con i PDF
+> generati e i dati persistiti. La directory `target/` prodotta da Maven aggiunge ~150–200 MB.
+> Uno spazio generoso evita errori di `no space left on device` durante la build o a runtime.
+
+> **Configurazione di riferimento** (macOS Apple Silicon, Podman 5.8.2):  
+> `podman-machine-default` — 5 vCPU · 7.45 GB RAM · 93 GB disco · VM type `applehv`.  
+> Questo profilo è ampiamente sufficiente per lo stack e lascia risorse libere per l'IDE e
+> gli altri strumenti di sviluppo.
+
+Per inizializzare la Podman Machine con le risorse consigliate, utilizzare i flag `--cpus`, `--memory` e `--disk-size`:
+
+```shell
+# Crea una macchina dedicata per lo sviluppo con risorse adeguate allo stack
+podman machine init \
+    --cpus 4 \
+    --memory 6144 \
+    --disk-size 40 \
+    quarkus-sse-dev
+
+podman machine start quarkus-sse-dev
+
+# Verificare le risorse assegnate
+podman machine inspect quarkus-sse-dev \
+    | grep -E '"CPUs"|"Memory"|"DiskSize"'
+```
+
+Se si dispone già di una macchina di default (`podman-machine-default`) con risorse insufficienti, è possibile ridimensionarla senza ricrearla:
+
+```shell
+# Ridimensionare la macchina esistente (richiede uno stop preventivo)
+podman machine stop
+podman machine set --cpus 4 --memory 6144
+podman machine start
+
+# Nota: --disk-size non è modificabile su una macchina già esistente.
+# In quel caso occorre ricreare la macchina:
+#   podman machine rm && podman machine init --disk-size 40 --cpus 4 --memory 6144
+```
+
+> **Nota su Linux**: su Linux i container girano nativamente, senza VM intermediaria.
+> Il dimensionamento della Podman Machine non è quindi applicabile; i limiti delle risorse
+> dipendono direttamente dall'host. È comunque consigliabile avere almeno **4 GB di RAM libera**
+> prima di avviare lo stack per evitare l'utilizzo eccessivo dello swap.
+
 ### Quick start con Podman
 
 ```shell
-# 1. (Prima volta) Inizializza e avvia la Podman Machine
-podman machine init && podman machine start
+# 1. (Prima volta) Inizializza e avvia la Podman Machine con risorse adeguate
+#    (vedi sezione precedente per i dettagli sul dimensionamento)
+podman machine init --cpus 4 --memory 6144 --disk-size 40 && podman machine start
 
 # 2. Build del JAR
 ./mvnw package -DskipTests

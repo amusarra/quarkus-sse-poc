@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  * This is a basic example of Fugerit Venus Doc usage,
  * running this junit will :
  * - creates data to be used in document model
- * - renders the 'document.ftl' template
+ * - renders the 'simple-document.ftl' template
  * - print the result in markdown format
  *
  * For further documentation :
@@ -39,9 +39,9 @@ class DocHelperTest {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             // creates the doc helper
             DocHelper docHelper = new DocHelper();
-            // create custom data for the fremarker template 'document.ftl'
+            // create custom data for the fremarker template 'simple-document.ftl'
 
-            String chainId = "document";
+            String chainId = "simple-document";
             // handler id
             String handlerId = DocConfig.TYPE_HTML;
             // output generation

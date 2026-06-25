@@ -6,19 +6,30 @@ package it.dontesta.quarkus.sse.eventbus.processor.pdf;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import java.util.random.RandomGenerator;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.fugerit.java.doc.base.config.DocConfig;
 import org.fugerit.java.doc.base.process.DocProcessContext;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
@@ -56,6 +67,16 @@ public class PdfEventProcessor {
 
     @Inject
     ObjectMapper objectMapper;
+
+    @Inject
+    MeterRegistry meterRegistry;
+
+    // Metriche di business
+    private Counter successCounter;
+    private Counter errorCounter;
+    private Timer generationTimer;
+    private DistributionSummary fileSizeSummary;
+    private final AtomicInteger activeGenerations = new AtomicInteger(0);
 
     /** Dedicated Redis publisher — initialised once at startup. */
     private ReactivePubSubCommands<String> redisPublisher;
@@ -99,6 +120,7 @@ public class PdfEventProcessor {
 
     void onStart(@Observes StartupEvent ev) {
         Log.debug("Initialization of the PdfEventProcessor...");
+        initializeMetrics();
         redisPublisher = reactiveRedisDS.pubsub(String.class);
         try {
             boolean found = minioClient.bucketExists(BucketExistsArgs.builder().bucket(bucketName).build());
@@ -113,6 +135,35 @@ public class PdfEventProcessor {
             throw new RuntimeException("Could not initialize MinIO bucket", e);
         }
         setupConsumer();
+    }
+
+    private void initializeMetrics() {
+        Log.debug("Initializing Micrometer metrics for PdfEventProcessor...");
+        
+        successCounter = Counter.builder("pdf.generation.total")
+                .tag("status", "success")
+                .description("Total number of successful PDF generations")
+                .register(meterRegistry);
+        
+        errorCounter = Counter.builder("pdf.generation.total")
+                .tag("status", "error")
+                .description("Total number of failed PDF generations")
+                .register(meterRegistry);
+        
+        generationTimer = Timer.builder("pdf.generation.duration.seconds")
+                .description("Time taken to generate and upload PDF files")
+                .register(meterRegistry);
+        
+        fileSizeSummary = DistributionSummary.builder("pdf.file.size.bytes")
+                .description("Distribution of PDF file sizes in bytes")
+                .baseUnit("bytes")
+                .register(meterRegistry);
+        
+        Gauge.builder("pdf.generation.active", activeGenerations, AtomicInteger::get)
+                .description("Number of PDF generation tasks currently executing in the worker pool")
+                .register(meterRegistry);
+        
+        Log.debug("Micrometer metrics initialized for PdfEventProcessor");
     }
 
     private void setupConsumer() {
@@ -161,7 +212,7 @@ public class PdfEventProcessor {
 
         generatePdfAsync(request.processId())
                         .thenAccept(
-                        pdfPath -> {
+                        result -> {
                             String downloadUrl = String.format("/api/pdf/download/%s", request.processId());
                             PdfGenerationCompleted completionEvent = new PdfGenerationCompleted(request.processId(),
                                     downloadUrl);
@@ -171,6 +222,9 @@ public class PdfEventProcessor {
 
                             publishToRedis(completedDestination, completionEvent);
                             Log.debugf("PDF completion notification sent for ID: %s", request.processId());
+                            
+                            // Incremento counter successo
+                            successCounter.increment();
                         })
                 .exceptionally(ex -> {
                     String errorMessage = "Failed to process PDF generation: " + ex.getCause().getMessage();
@@ -180,6 +234,9 @@ public class PdfEventProcessor {
 
                     publishToRedis(errorsDestination, errorEvent);
                     Log.debugf("PDF generation error notification sent for ID: %s", request.processId());
+                    
+                    // Incremento counter errore
+                    errorCounter.increment();
                     return null;
                 });
     }
@@ -211,14 +268,23 @@ public class PdfEventProcessor {
         Log.debugf("Scheduling PDF generation for process ID: %s with a delay of %d seconds", processId, delay);
 
         return CompletableFuture.supplyAsync(() -> {
+            activeGenerations.incrementAndGet();
+            Timer.Sample sample = Timer.start(meterRegistry);
+            
             String objectKey = processId + ".pdf";
             try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                String chainId = "document";
+                String[] chainId = new String[] {"simple-document", "complex-document"};
+                int selectedRandomIndex = RandomGenerator.getDefault().nextInt(chainId.length);
+
                 String handlerId = DocConfig.TYPE_PDF;
 
                 DocProcessContext context = DocProcessContext.newContext("processId", processId);
 
-                docHelper.getDocProcessConfig().fullProcess(chainId, context, handlerId, baos);
+                // this contest used only for demonstration purposes, in a real scenario you would populate it with actual data
+                // and only complex-document would use it, simple-document does not use any data from the context
+                context.setAttribute("listPeople", generatePeopleList());
+
+                docHelper.getDocProcessConfig().fullProcess(chainId[selectedRandomIndex], context, handlerId, baos);
 
                 byte[] pdfBytes = baos.toByteArray();
                 minioClient.putObject(
@@ -230,11 +296,37 @@ public class PdfEventProcessor {
                                 .build());
 
                 Log.debugf("PDF successfully generated and uploaded to MinIO with key: %s", objectKey);
+                
+                // Registra dimensione del file
+                fileSizeSummary.record(pdfBytes.length);
+                
+                // Registra durata
+                sample.stop(generationTimer);
+                
                 return objectKey;
             } catch (Exception e) {
                 Log.errorf(e, "Failed to generate and upload PDF for process ID: %s", processId);
+                
+                // Registra durata anche in caso di errore
+                sample.stop(generationTimer);
+                
                 throw new CompletionException(e);
+            } finally {
+                activeGenerations.decrementAndGet();
             }
         }, CompletableFuture.delayedExecutor(delay, TimeUnit.SECONDS, executor));
+    }
+
+    /**
+     * Return the list with the sample data to be used in the fremarker template 'simple-document.ftl'.
+     *
+     * @return List of maps containing sample people data
+     */
+    private List<Map<String, String>> generatePeopleList() {
+        return List.of(
+            Map.of("name", "Alice", "surname", "Rossi", "title", "Developer"),
+            Map.of("name", "Bob", "surname", "Bianchi", "title", "Designer"),
+            Map.of("name", "Charlie","surname", "Verdi", "title", "Manager")
+        );
     }
 }

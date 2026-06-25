@@ -11,6 +11,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 import io.quarkus.logging.Log;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
 import io.quarkus.redis.datasource.pubsub.ReactivePubSubCommands;
@@ -89,6 +92,9 @@ public class SseBroadcaster {
     ObjectMapper objectMapper;
 
     @Inject
+    MeterRegistry meterRegistry;
+
+    @Inject
     @ConfigProperty(name = "pdf.eventbus.destination.completed", defaultValue = "pdf-generation-completed")
     String completedChannel;
 
@@ -98,9 +104,15 @@ public class SseBroadcaster {
 
     /** Subscriber handle — used to unsubscribe cleanly on shutdown. */
     private ReactivePubSubCommands.ReactiveRedisSubscriber redisChannelSubscriber;
+    
+    // Metriche SSE e Scalabilità
+    private Counter eventsDeliveredCounter;
+    private Counter pendingBufferHitsCounter;
+    private Counter pendingBufferWritesCounter;
 
     void onStart(@Observes StartupEvent ev) {
         Log.debug("SseBroadcaster initializing with Redis Pub/Sub...");
+        initializeMetrics();
         ReactivePubSubCommands<String> redisPubSub = reactiveRedisDS.pubsub(String.class);
 
         redisPubSub.subscribe(
@@ -120,6 +132,27 @@ public class SseBroadcaster {
                         err -> Log.errorf(err, "Failed to subscribe to Redis channels"));
 
         Log.debug("SseBroadcaster initialized and listening for events via Redis Pub/Sub.");
+    }
+
+    private void initializeMetrics() {
+        Log.debug("Initializing Micrometer metrics for SseBroadcaster...");
+        
+        // Gauge basato sulla dimensione della mappa processors
+        meterRegistry.gaugeMapSize("sse.active.streams", java.util.Collections.emptyList(), processors);
+        
+        eventsDeliveredCounter = Counter.builder("sse.events.delivered.total")
+                .description("Total number of SSE events successfully delivered to clients")
+                .register(meterRegistry);
+        
+        pendingBufferHitsCounter = Counter.builder("sse.pending.buffer.hits.total")
+                .description("Total number of events retrieved from Redis pending buffer")
+                .register(meterRegistry);
+        
+        pendingBufferWritesCounter = Counter.builder("sse.pending.buffer.writes.total")
+                .description("Total number of events written to Redis pending buffer")
+                .register(meterRegistry);
+        
+        Log.debug("Micrometer metrics initialized for SseBroadcaster");
     }
 
     void onShutdown(@Observes ShutdownEvent ev) {
@@ -189,6 +222,7 @@ public class SseBroadcaster {
                         json -> {
                             if (json != null) {
                                 Log.debugf("Consuming pending completed event from Redis for processId: %s", processId);
+                                pendingBufferHitsCounter.increment();
                                 onCompletedMessage(json);
                             } else {
                                 // No completed event — check for a pending error event.
@@ -199,6 +233,7 @@ public class SseBroadcaster {
                                                         Log.debugf(
                                                                 "Consuming pending error event from Redis for processId: %s",
                                                                 processId);
+                                                        pendingBufferHitsCounter.increment();
                                                         onErrorMessage(errJson);
                                                     }
                                                 },
@@ -251,6 +286,10 @@ public class SseBroadcaster {
             processor.onNext(sseEvent);
             processor.onComplete();
             processors.remove(processId);
+            
+            // Incremento counter eventi consegnati
+            eventsDeliveredCounter.increment();
+            
             Log.debugf("Removed SSE processor for processId: %s", processId);
         } else {
             // No local SSE client yet — buffer in Redis for late-arriving connections.
@@ -259,7 +298,11 @@ public class SseBroadcaster {
             reactiveRedisDS.value(String.class)
                     .setex(PENDING_COMPLETED_PREFIX + processId, PENDING_EVENT_TTL_SECONDS, rawJson)
                     .subscribe().with(
-                            v -> Log.debugf("Pending completed event stored in Redis for processId: %s", processId),
+                            v -> {
+                                Log.debugf("Pending completed event stored in Redis for processId: %s", processId);
+                                // Incremento counter scritture buffer
+                                pendingBufferWritesCounter.increment();
+                            },
                             err -> Log.errorf(err,
                                     "Failed to store pending completed event in Redis for processId: %s", processId));
         }
@@ -286,6 +329,10 @@ public class SseBroadcaster {
             processor.onNext(sseEvent);
             processor.onComplete();
             processors.remove(processId);
+            
+            // Incremento counter eventi consegnati
+            eventsDeliveredCounter.increment();
+            
             Log.debugf("Removed SSE processor for processId: %s after error event", processId);
         } else {
             // No local SSE client yet — buffer in Redis for late-arriving connections.
@@ -294,7 +341,11 @@ public class SseBroadcaster {
             reactiveRedisDS.value(String.class)
                     .setex(PENDING_ERROR_PREFIX + processId, PENDING_EVENT_TTL_SECONDS, rawJson)
                     .subscribe().with(
-                            v -> Log.debugf("Pending error event stored in Redis for processId: %s", processId),
+                            v -> {
+                                Log.debugf("Pending error event stored in Redis for processId: %s", processId);
+                                // Incremento counter scritture buffer
+                                pendingBufferWritesCounter.increment();
+                            },
                             err -> Log.errorf(err,
                                     "Failed to store pending error event in Redis for processId: %s", processId));
         }

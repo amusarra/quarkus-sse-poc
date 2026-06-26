@@ -1,0 +1,20 @@
+---
+# Secret for the keystore password
+kind: Secret
+apiVersion: v1
+metadata:
+  name: minio-access-key
+data:
+  minio-user-access-key: bWluaW8tYWRtaW4=
+  minio-user-secret-key: bWluaW8tYWRtaW4=
+type: Opaque
+---
+# Secret for the Redis password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis
+  namespace: antonio-musarra-dev
+type: Opaque
+stringData:
+  database-password: "SWxUdW9QYXNzd29yZFNpY3VyYVF1aQ=="

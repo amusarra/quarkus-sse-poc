@@ -5,7 +5,7 @@
 #
 # Services
 # ────────
-#  redis       Redis 7 — cross-instance Pub/Sub transport
+#  redis       Redis 7 (Red Hat UBI 9) — cross-instance Pub/Sub transport
 #  minio       MinIO   — object storage for generated PDFs
 #  minio-init  one-shot init container — creates the pdf-bucket
 #  app-1       Quarkus instance 1 (JVM mode)
@@ -58,6 +58,7 @@ x-app-common: &app-common
     # Redis — Quarkus converts property names to env-var format automatically:
     #   quarkus.redis.hosts → QUARKUS_REDIS_HOSTS
     QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+    QUARKUS_REDIS_PASSWORD: ${REDIS_PASSWORD:-changeMe123!}
     # MinIO
     QUARKUS_MINIO_HOST: http://minio:9000
     QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
@@ -85,19 +86,23 @@ x-app-common: &app-common
 services:
 
   # ── Redis ───────────────────────────────────────────────────────────────────
+  # RHEL Redis runs in protected mode by default. For local development we disable
+  # it since Redis is only accessible within the backend network.
+  # For production: enable protected mode and set --requirepass or use Redis ACLs.
   redis:
-    image: redis:7-alpine
+    image: registry.redhat.io/rhel9/redis-7:9.8-1782346713
     container_name: sse-poc-redis
     restart: unless-stopped
     command: >
       redis-server
+        --requirepass ${REDIS_PASSWORD:-changeMe123!}
         --save 60 1
         --loglevel warning
     ports:
       # Exposed for local debugging only; remove in a hardened environment.
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - redis-data:/var/lib/redis/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -155,7 +160,7 @@ services:
     container_name: sse-poc-app-1
     environment:
       # Inherit common env and add instance identifier for log tracing
-      QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+      QUARKUS_REDIS_HOSTS: redis://:${REDIS_PASSWORD:-changeMe123!}@redis:6379
       QUARKUS_MINIO_HOST: http://minio:9000
       QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
       QUARKUS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -168,7 +173,7 @@ services:
     <<: *app-common
     container_name: sse-poc-app-2
     environment:
-      QUARKUS_REDIS_HOSTS: redis://redis:${REDIS_PORT:-6379}
+      QUARKUS_REDIS_HOSTS: redis://:${REDIS_PASSWORD:-changeMe123!}@redis:6379
       QUARKUS_MINIO_HOST: http://minio:9000
       QUARKUS_MINIO_SECURE: ${MINIO_SECURE:-false}
       QUARKUS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}

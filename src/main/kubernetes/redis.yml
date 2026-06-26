@@ -22,7 +22,17 @@ spec:
           emptyDir: {}
       containers:
         - name: redis
-          image: redis:7-alpine
+          # Immagine ufficiale RHEL 9 specifica indicata da te
+          image: registry.redhat.io/rhel9/redis-7:9.8-1782346713
+          args:
+            - redis-server
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            # Forziamo Redis a usare la password iniettata dall'ambiente
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 6379
@@ -31,12 +41,14 @@ spec:
             limits:
               memory: 512Mi
           env:
+            # L'entrypoint Red Hat usa questa variabile per configurare la sicurezza all'avvio
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: redis
                   key: database-password
           volumeMounts:
+            # La path standard di persistenza per l'immagine Red Hat
             - name: redis-data
               mountPath: /var/lib/redis/data
           livenessProbe:
@@ -58,14 +70,6 @@ spec:
             periodSeconds: 10
             successThreshold: 1
             failureThreshold: 3
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            runAsNonRoot: true
-            seccompProfile:
-              type: RuntimeDefault
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
       dnsPolicy: ClusterFirst

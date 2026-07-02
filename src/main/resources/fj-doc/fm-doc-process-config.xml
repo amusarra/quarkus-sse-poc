@@ -50,7 +50,10 @@
     </docChain>
 
     <!-- example document chain xml -->
-    <docChain id="document" parent="shared">
+    <docChain id="simple-document" parent="shared">
+        <chainStep stepType="complex" map-all="true" template-path="${chainId}.ftl"/>
+    </docChain>
+    <docChain id="complex-document" parent="shared">
         <chainStep stepType="complex" map-all="true" template-path="${chainId}.ftl"/>
     </docChain>
 

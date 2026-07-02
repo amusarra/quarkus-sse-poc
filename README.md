@@ -113,7 +113,7 @@ A ready-to-use `docker-compose.yml` is provided in `src/main/docker/` and is ful
 
 | Service | Image | Role |
 |---------|-------|------|
-| `redis` | `redis:7-alpine` | Cross-instance Pub/Sub transport |
+| `redis` | `registry.redhat.io/rhel9/redis-7:9.8-1782346713` | Cross-instance Pub/Sub transport (RHEL 9) |
 | `minio` | `minio/minio:latest` | Object storage for generated PDFs |
 | `minio-init` | `minio/mc:latest` | One-shot bucket initialiser |
 | `app-1` | `quarkus/quarkus-sse-poc-jvm:latest` | Quarkus instance 1 |
@@ -127,14 +127,18 @@ A ready-to-use `docker-compose.yml` is provided in `src/main/docker/` and is ful
 podman machine init
 podman machine start
 
-# 2. Build the application JAR
+# 2. Login to Red Hat Registry (required for Redis image)
+podman login registry.redhat.io
+# Use your Red Hat account credentials
+
+# 3. Build the application JAR
 ./mvnw package -DskipTests
 
-# 3. Build the container image
+# 4. Build the container image
 podman build -f src/main/docker/Dockerfile.jvm \
              -t quarkus/quarkus-sse-poc-jvm:latest .
 
-# 4. Start the full stack
+# 5. Start the full stack
 podman compose -f src/main/docker/docker-compose.yml up -d
 
 # Application → http://localhost:8080
@@ -142,7 +146,37 @@ podman compose -f src/main/docker/docker-compose.yml up -d
 # MinIO API   → http://localhost:9000
 ```
 
+> **Red Hat Registry Authentication**: The Redis image is hosted on Red Hat's registry and requires authentication. You can use a free [Red Hat Developer account](https://developers.redhat.com/register) or your Red Hat subscription credentials.
+
+> **Redis Protected Mode**: The RHEL Redis image runs in protected mode by default. For local development, the `docker-compose.yml` disables it with `--protected-mode no` since Redis is only accessible within the Docker backend network. For production deployments, see `src/docs/REDIS_PROTECTED_MODE.md` for secure authentication configurations.
+
 > **Rootless Podman note**: The default `NGINX_HTTP_PORT` is `8080` (set in `src/main/docker/.env`) to avoid the port < 1024 restriction of rootless containers.
+
+## Deployment on OpenShift
+
+First you need deploy the supporting services (Redis and MinIO) on OpenShift. You can use the provided Kubernetes YAML files in `src/main/kubernetes/`. You need have `oc` CLI installed and logged in to your OpenShift cluster. Then run the following commands:
+
+```shell script
+oc apply -f src/main/kubernetes/minio.yml
+oc apply -f src/main/kubernetes/redis.yml
+```
+
+The application can be deployed on OpenShift using the following command:
+
+```shell script
+mvn clean package -DskipTests=true -Dquarkus.openshift.deploy=true
+```
+
+After the deployment, you can access the application at `https://<your-openshift-route>/pdf-generator.html` and check the MinIO console at `https://<your-openshift-route>/login/`.
+
+You can get the OpenShift route using the following command:
+
+```shell script
+oc get route quarkus-sse-poc -o jsonpath='{.spec.host}'
+oc get route minio-console -o jsonpath='{.spec.host}'
+```
+
+For more information about Quarkus SSE PoC, you can refer to the [Gestire task asincroni con Server-Sent Events (SSE) e Quarkus](src/docs/blog/article/come-gestire-task-asincroni-con-sse-quarkus.md).
 
 ## Packaging and running the application
 

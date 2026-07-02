@@ -13,6 +13,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 ### Security
 
+## [1.3.1-SNAPSHOT] - Unreleased
+
+### Added
+
+- **Micrometer Extension**:  
+  Added the Metrics extension to expose the `/q/metrics` endpoint for Prometheus
+  scraping. The following metrics are now available:
+  - PdfEventProcessor 
+    - `pdf_generation_total` (counter) — total number of successful PDF generations, labeled by `status` (`success`, `error`).
+    - `pdf_generation_duration_seconds` (summary) — time taken to generate and upload PDF
+      files.
+    - `pdf_file_size_bytes` (summary) — distribution of PDF file sizes in bytes.
+    - `pdf_generation_active` (gauge) — current number of active PDF generation processes.
+  - SseBroadcaster
+    - `sse_active_streams` (gauge) — current number of active SSE streams (connected clients).
+    - `sse_events_delivered_total` (counter) — total number of SSE events successfully delivered to clients.
+    - `sse_pending_buffer_hits_total` (counter) — total number of events retrieved from Redis pending buffer.
+    - `sse_pending_buffer_writes_total` (counter) — total number of events written to Redis pending buffer.
+
+- **Application OpenShift Configuration**: added new configuration to deploy application on OpenShift via command `mvn clean package -DskipTests=true -Dquarkus.openshift.deploy=true`.
+- **Kubernetes Configuration**: yaml files for MinIO and Redis deployment
+
+### Changed
+
+- add complex document FreeMarker template and update related configurations
+- update Redis image reference and add authentication instructions in README
+- update README with new OpenShift and Kubernetes deployment instructions
+
 ## [1.3.0-SNAPSHOT] - Unreleased
 
 ### Added

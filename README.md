@@ -152,6 +152,32 @@ podman compose -f src/main/docker/docker-compose.yml up -d
 
 > **Rootless Podman note**: The default `NGINX_HTTP_PORT` is `8080` (set in `src/main/docker/.env`) to avoid the port < 1024 restriction of rootless containers.
 
+## Deployment on OpenShift
+
+First you need deploy the supporting services (Redis and MinIO) on OpenShift. You can use the provided Kubernetes YAML files in `src/main/kubernetes/`. You need have `oc` CLI installed and logged in to your OpenShift cluster. Then run the following commands:
+
+```shell script
+oc apply -f src/main/kubernetes/minio.yml
+oc apply -f src/main/kubernetes/redis.yml
+```
+
+The application can be deployed on OpenShift using the following command:
+
+```shell script
+mvn clean package -DskipTests=true -Dquarkus.openshift.deploy=true
+```
+
+After the deployment, you can access the application at `https://<your-openshift-route>/pdf-generator.html` and check the MinIO console at `https://<your-openshift-route>/login/`.
+
+You can get the OpenShift route using the following command:
+
+```shell script
+oc get route quarkus-sse-poc -o jsonpath='{.spec.host}'
+oc get route minio-console -o jsonpath='{.spec.host}'
+```
+
+For more information about Quarkus SSE PoC, you can refer to the [Gestire task asincroni con Server-Sent Events (SSE) e Quarkus](src/docs/blog/article/come-gestire-task-asincroni-con-sse-quarkus.md).
+
 ## Packaging and running the application
 
 The application can be packaged using:

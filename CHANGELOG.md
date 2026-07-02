@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add complex document FreeMarker template and update related configurations
 - update Redis image reference and add authentication instructions in README
+- update README with new OpenShift and Kubernetes deployment instructions
 
 ## [1.3.0-SNAPSHOT] - Unreleased
 
